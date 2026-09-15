@@ -1,0 +1,12 @@
+node_modules/
+.git/
+.wrangler/
+netlify/
+package.json
+package-lock.json
+bun.lock
+bun.lockb
+README-SETUP.txt
+netlify.toml
+wrangler.jsonc
+.assetsignore
