@@ -1,3 +1,4 @@
+// force cloudflare rebuild
 const encoder = new TextEncoder();
 const SESSION_DAYS = 30;
 const LOGIN_LIMIT = 8;
