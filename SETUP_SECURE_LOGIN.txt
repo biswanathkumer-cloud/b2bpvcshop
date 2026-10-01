@@ -1,0 +1,12 @@
+SECURE LOGIN
+
+Cloudflare > b2bpvcshop > Settings > Variables and Secrets-এ:
+ADMIN_INITIAL_PASSWORD নামে একটি Secret রাখুন।
+Value হবে আপনার নিজের Owner password; ChatGPT-তে value দেবেন না।
+
+Worker customer এবং owner login-এর জন্য secure HttpOnly cookies ব্যবহার করে।
+D1 tables না থাকলে প্রথম API request-এ Worker প্রয়োজনীয় tables তৈরি করবে।
+
+Health check:
+https://b2bpvcshop.biswanath-kumer.workers.dev/api/health
+Expected: {"ok":true,"db":true,"assets":true,...}

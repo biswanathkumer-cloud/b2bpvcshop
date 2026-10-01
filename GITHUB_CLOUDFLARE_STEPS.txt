@@ -1,0 +1,11 @@
+1. GitHub b2bpvcshop repository-তে ZIP খুলে সব file replace করুন।
+2. নিশ্চিত করুন worker.js-এর প্রথম line: const encoder = new TextEncoder();
+3. Commit changes করুন।
+4. Cloudflare Workers & Pages > b2bpvcshop > Deployments খুলুন।
+5. নতুন commit-এর deployment Success হওয়া পর্যন্ত অপেক্ষা করুন।
+6. Worker URL খুলে page load পরীক্ষা করুন।
+7. /api/health browser-এ খুললে JSON-এ ok:true, db:true, assets:true দেখা উচিত।
+8. Owner login: username owner; password আপনার ADMIN_INITIAL_PASSWORD secret-এর value।
+9. Customer Create Account দিয়ে নতুন mobile/password দিয়ে পরীক্ষা করুন।
+
+কোনও password/token ChatGPT-তে পাঠাবেন না।
