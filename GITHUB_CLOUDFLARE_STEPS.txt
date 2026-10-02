@@ -1,0 +1,1 @@
+Upload all files keeping public/index.html. Deploy from the GitHub-connected Cloudflare build, not the manual editor.
