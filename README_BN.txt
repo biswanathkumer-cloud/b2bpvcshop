@@ -1,21 +1,26 @@
-B2B PVC PRINTING SHOP — FINAL GUEST CHECKOUT PACKAGE
+B2B PVC PRINTING SHOP - FINAL FIXED PACKAGE
 
-এই package-এ:
-1. Customer Login / Create Account নেই।
-2. Purchase-এর আগে Name + Mobile + CAPTCHA verification আছে।
-3. নতুন visitor-এর cart fresh/empty থাকে; পুরনো visitor-এর cart public page-এ carry হয় না।
-4. অন্য customer-এর personal details বা order history public page-এ দেখানো হয় না।
-5. Checkout-এ Name, Mobile, Full Address, PIN, Transaction ID এবং Payment Screenshot upload আছে।
-6. Purchase receipt / bill print-save করা যায়।
-7. Quantity-wise offer price এবং discount display/editor রাখা হয়েছে।
-8. Delivery amount owner settings থেকে set করা যায়।
-9. Guest order Worker + D1-এ private guest_orders table-এ save হয়।
-10. Payment screenshot public URL হিসেবে serve করা হয় না।
-11. Owner API দিয়ে guest orders protected ভাবে নেওয়া যায়।
+1. Customer Login / Create Account নেই.
+2. Customer Name + Mobile + CAPTCHA verify করে Add to Cart করতে পারে.
+3. নতুন browser session-এ customer cart fresh থাকে.
+4. Checkout-এ Name, Mobile, Address, PIN, Transaction ID, Payment Screenshot নেওয়া হয়.
+5. Private receipt token দিয়ে receipt পাওয়া যায়; Print / Save as PDF করা যায়.
+6. Owner Login server-side secure.
+7. Quantity-wise offers এবং time-based offers owner panel থেকে update করা যায়.
+8. Product card-এর নিচে Bulk Offer text দেখানো হয় না.
+9. Upcoming offer notification দেখা যায়.
+10. Poster settings live-save করার জন্য admin site-config endpoint আছে.
+11. Owner orders private server-side endpoint-এ থাকে.
+12. WhatsApp automatic notification-এর জন্য Cloudflare Worker secrets লাগবে:
+   WHATSAPP_ACCESS_TOKEN
+   WHATSAPP_PHONE_NUMBER_ID
+   WHATSAPP_OWNER_NUMBER
+   এগুলো chat-এ কখনও পাঠাবেন না.
 
-DEPLOY:
-- GitHub repo-তে public/index.html, worker.js, wrangler.jsonc রাখুন।
-- Cloudflare Worker deploy করুন।
+Deploy:
+  npx wrangler deploy
 
-IMPORTANT:
-Automatic WhatsApp API notification চালাতে WhatsApp Business Cloud API credentials Cloudflare secret/vars হিসেবে আলাদা করে configure করতে হবে। কোনো password/API secret এই file-এ রাখা হয়নি।
+Cloudflare Secret:
+  ADMIN_INITIAL_PASSWORD (কমপক্ষে 8 character)
+
+Note: Payment screenshot-এর জন্য ছোট image ব্যবহার করুন. Current implementation 650KB-এর মধ্যে রাখে.

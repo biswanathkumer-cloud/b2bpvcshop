@@ -1,92 +1,73 @@
-const encoder = new TextEncoder();
-const SESSION_DAYS = 30;
-const LOGIN_LIMIT = 8;
-const ADMIN_USERNAME = 'owner';
-const loginAttempts = new Map();
-function json(data, status=200, headers={}) { return new Response(JSON.stringify(data), {status, headers:{'content-type':'application/json; charset=utf-8', ...headers}}); }
-function b64(buf){let s=''; const bytes=new Uint8Array(buf); for(const b of bytes)s+=String.fromCharCode(b); return btoa(s);}
-function unb64(s){const bin=atob(s); const a=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i); return a;}
-function randomToken(){const a=new Uint8Array(32); crypto.getRandomValues(a); return b64(a).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');}
-async function sha256(s){return crypto.subtle.digest('SHA-256', encoder.encode(s));}
-async function passwordHash(password, saltB64){ const salt=saltB64?unb64(saltB64):crypto.getRandomValues(new Uint8Array(16)); const key=await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']); const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:100000,hash:'SHA-256'}, key, 256); return {salt:b64(salt), hash:b64(bits)}; }
-async function verifyPassword(password, salt, expected){const x=await passwordHash(password,salt); return x.hash===expected;}
+const encoder=new TextEncoder();
+const ADMIN_USERNAME='owner';
+const LOGIN_LIMIT=8; const loginAttempts=new Map();
+const now=()=>new Date().toISOString();
+function json(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers}})}
+function b64(buf){let s='';for(const b of new Uint8Array(buf))s+=String.fromCharCode(b);return btoa(s)}
+function unb64(s){const x=atob(s),a=new Uint8Array(x.length);for(let i=0;i<x.length;i++)a[i]=x.charCodeAt(i);return a}
+function randomToken(){const a=new Uint8Array(32);crypto.getRandomValues(a);return b64(a).replaceAll('+','-').replaceAll('/','_').replaceAll('=','')}
+async function sha256(s){return crypto.subtle.digest('SHA-256',encoder.encode(s))}
+async function passwordHash(password,saltB64){const salt=saltB64?unb64(saltB64):crypto.getRandomValues(new Uint8Array(16));const key=await crypto.subtle.importKey('raw',encoder.encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:100000,hash:'SHA-256'},key,256);return{salt:b64(salt),hash:b64(bits)}}
+async function verifyPassword(password,salt,expected){try{const x=await passwordHash(password,salt);return x.hash===expected}catch{return false}}
 function cookie(name,value,maxAge){return `${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`}
 function clearCookie(name){return `${name}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`}
 function adminCookie(token){return `admin_session=${token}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Strict`}
 function clearAdminCookie(){return `admin_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`}
-function getCookie(req,name){const c=req.headers.get('Cookie')||''; const m=c.match(new RegExp('(?:^|; )'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'=([^;]+)')); return m?decodeURIComponent(m[1]):null;}
+function getCookie(req,name){const c=req.headers.get('Cookie')||'';const m=c.match(new RegExp('(?:^|; )'+name.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')+'=([^;]+)'));return m?decodeURIComponent(m[1]):null}
+function validPassword(p){return typeof p==='string'&&p.length>=8&&p.length<=128}
 function cleanPhone(v){return String(v||'').replace(/\D/g,'').slice(-10)}
-function validPassword(p){return typeof p==='string' && p.length>=8 && p.length<=128}
-function now(){return new Date().toISOString()}
+function rateLimit(req){const ip=req.headers.get('CF-Connecting-IP')||'unknown',t=Date.now();let a=loginAttempts.get(ip)||[];a=a.filter(x=>t-x<15*60*1000);if(a.length>=LOGIN_LIMIT)return true;a.push(t);loginAttempts.set(ip,a);return false}
 async function body(req){try{return await req.json()}catch{return {}}}
-
-async function ensureGuestOrders(env){
- await env.DB.prepare(`CREATE TABLE IF NOT EXISTS guest_orders (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  order_no TEXT NOT NULL UNIQUE,
-  receipt_token TEXT NOT NULL UNIQUE,
-  name TEXT NOT NULL,
-  phone TEXT NOT NULL,
-  address TEXT NOT NULL,
-  pin TEXT NOT NULL,
-  items_json TEXT NOT NULL,
-  subtotal REAL NOT NULL DEFAULT 0,
-  delivery REAL NOT NULL DEFAULT 0,
-  total REAL NOT NULL DEFAULT 0,
-  txn TEXT NOT NULL,
-  payment_screenshot TEXT,
-  payment_screenshot_name TEXT,
-  doc_number TEXT,
-  doc_file_name TEXT,
-  status TEXT NOT NULL DEFAULT 'Payment Submitted',
-  created_at TEXT NOT NULL
- )`).run();
+async function ensureTables(env){
+ await env.DB.prepare(`CREATE TABLE IF NOT EXISTS guest_receipts(token TEXT PRIMARY KEY,order_no TEXT NOT NULL,receipt_json TEXT NOT NULL,created_at TEXT NOT NULL)`).run();
+ await env.DB.prepare(`CREATE TABLE IF NOT EXISTS site_config(id INTEGER PRIMARY KEY CHECK(id=1),config_json TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
 }
-
-async function userFromSession(req,env){const token=getCookie(req,'pvc_session'); if(!token)return null; const digest=await sha256(token); const hash=b64(digest); const row=await env.DB.prepare(`SELECT u.id,u.name,u.phone,u.address,u.pin,u.created_at FROM sessions s JOIN customers u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?`).bind(hash,now()).first(); return row||null;}
-function publicUser(u){return u?{id:u.id,name:u.name,phone:u.phone,address:u.address||'',pin:u.pin||'',createdAt:u.created_at}:null}
-async function requireUser(req,env){const u=await userFromSession(req,env); if(!u) throw new Error('UNAUTHORIZED'); return u;}
-function rateLimit(req){const ip=req.headers.get('CF-Connecting-IP')||'unknown'; const t=Date.now(); let a=loginAttempts.get(ip)||[]; a=a.filter(x=>t-x<15*60*1000); if(a.length>=LOGIN_LIMIT)return true; a.push(t); loginAttempts.set(ip,a); return false;}
-async function requireAdmin(req,env){ const token=getCookie(req,'admin_session'); if(!token)throw new Error('UNAUTHORIZED'); const tokenHash=b64(await sha256(token)); const row=await env.DB.prepare('SELECT a.* FROM admins a JOIN admin_sessions s ON s.admin_id=a.id WHERE s.token_hash=? AND s.expires_at>?').bind(tokenHash,now()).first(); if(!row)throw new Error('UNAUTHORIZED'); return row; }
-async function ensureAdmin(env){ const existing=await env.DB.prepare('SELECT id FROM admins WHERE username=?').bind(ADMIN_USERNAME).first(); if(existing)return existing; const initial=env.ADMIN_INITIAL_PASSWORD; if(!initial||!validPassword(initial))throw new Error('ADMIN_INITIAL_PASSWORD secret is not configured.'); const ph=await passwordHash(initial); const r=await env.DB.prepare('INSERT INTO admins(username,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?)').bind(ADMIN_USERNAME,ph.hash,ph.salt,now(),now()).run(); return {id:r.meta.last_row_id,username:ADMIN_USERNAME}; }
-async function api(req,env){
- const url=new URL(req.url), path=url.pathname;
-
- if(req.method==='POST'&&path==='/api/guest-orders'){
+async function requireAdmin(req,env){const token=getCookie(req,'admin_session');if(!token)throw new Error('UNAUTHORIZED');const th=b64(await sha256(token));const row=await env.DB.prepare('SELECT a.* FROM admins a JOIN admin_sessions s ON s.admin_id=a.id WHERE s.token_hash=? AND s.expires_at>?').bind(th,now()).first();if(!row)throw new Error('UNAUTHORIZED');return row}
+async function ensureAdmin(env,password){let row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(ADMIN_USERNAME).first();const initial=env.ADMIN_INITIAL_PASSWORD;if(!row){if(!initial||!validPassword(initial))throw new Error('ADMIN_INITIAL_PASSWORD secret is not configured.');const ph=await passwordHash(initial);await env.DB.prepare('INSERT INTO admins(username,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?)').bind(ADMIN_USERNAME,ph.hash,ph.salt,now(),now()).run();row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(ADMIN_USERNAME).first();}
+ if(!(await verifyPassword(password,row.password_salt,row.password_hash))){
+   if(initial&&password===initial){const ph=await passwordHash(initial);await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=?,updated_at=? WHERE id=?').bind(ph.hash,ph.salt,now(),row.id).run();row=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(row.id).first();}
+ }
+ return row;
+}
+function safeJson(s){try{return JSON.parse(s||'{}')}catch{return {}}}
+async function sendWhatsApp(env,msg){
+ const token=env.WHATSAPP_ACCESS_TOKEN,phoneId=env.WHATSAPP_PHONE_NUMBER_ID,to=env.WHATSAPP_OWNER_NUMBER;
+ if(!token||!phoneId||!to)return false;
+ try{const r=await fetch(`https://graph.facebook.com/v23.0/${phoneId}/messages`,{method:'POST',headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to,type:'text',text:{body:msg}})});return r.ok}catch{return false}
+}
+async function api(req,env){const path=new URL(req.url).pathname;
+ if(path.startsWith('/api/'))await ensureTables(env);
+ if(req.method==='POST'&&path==='/api/admin/login'){
+  if(rateLimit(req))return json({error:'Too many attempts. Please try again later.'},429);
+  const b=await body(req),password=String(b.password||'');if(String(b.username||'')!==ADMIN_USERNAME||!validPassword(password))return json({error:'Invalid owner credentials.'},401);
+  try{const row=await ensureAdmin(env,password);if(!row||!(await verifyPassword(password,row.password_salt,row.password_hash)))return json({error:'Invalid owner credentials.'},401);const token=randomToken(),th=b64(await sha256(token));await env.DB.prepare('INSERT INTO admin_sessions(token_hash,admin_id,expires_at,created_at) VALUES(?,?,?,?)').bind(th,row.id,new Date(Date.now()+12*60*60*1000).toISOString(),now()).run();return json({ok:true,username:row.username},200,{'Set-Cookie':adminCookie(token)})}catch(e){return json({error:e.message||'Owner login failed.'},500)}
+ }
+ if(req.method==='GET'&&path==='/api/admin/me'){try{const a=await requireAdmin(req,env);return json({ok:true,username:a.username})}catch{return json({error:'Not logged in.'},401)}}
+ if(req.method==='POST'&&path==='/api/admin/logout'){const t=getCookie(req,'admin_session');if(t)await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash=?').bind(b64(await sha256(t))).run();return json({ok:true},200,{'Set-Cookie':clearAdminCookie()})}
+ if(req.method==='PUT'&&path==='/api/admin/password'){try{const a=await requireAdmin(req,env),b=await body(req),cur=String(b.currentPassword||''),next=String(b.newPassword||'');if(!validPassword(next))return json({error:'New password must be at least 8 characters.'},400);if(!(await verifyPassword(cur,a.password_salt,a.password_hash)))return json({error:'Current password is incorrect.'},400);const ph=await passwordHash(next);await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=?,updated_at=? WHERE id=?').bind(ph.hash,ph.salt,now(),a.id).run();return json({ok:true})}catch{return json({error:'Please login.'},401)}}
+ if(req.method==='GET'&&path==='/api/admin/orders'){try{await requireAdmin(req,env);const rows=await env.DB.prepare(`SELECT o.order_no,o.items_json,o.subtotal,o.delivery,o.total,o.status,o.created_at,c.name,c.phone,c.address,c.pin FROM orders o LEFT JOIN customers c ON c.id=o.customer_id ORDER BY o.created_at DESC LIMIT 200`).all();return json({orders:rows.results||[]})}catch{return json({error:'Please login.'},401)}}
+ if(req.method==='PUT'&&path.startsWith('/api/admin/orders/')){try{await requireAdmin(req,env);const orderNo=decodeURIComponent(path.split('/').pop()),b=await body(req);await env.DB.prepare('UPDATE orders SET status=? WHERE order_no=?').bind(String(b.status||'Order Received'),orderNo).run();return json({ok:true})}catch{return json({error:'Please login.'},401)}}
+ if(req.method==='GET'&&path==='/api/admin/site-config'){try{await requireAdmin(req,env);const r=await env.DB.prepare('SELECT config_json FROM site_config WHERE id=1').first();return json({config:r?safeJson(r.config_json):null})}catch{return json({error:'Please login.'},401)}}
+ if(req.method==='PUT'&&path==='/api/admin/site-config'){try{await requireAdmin(req,env);const b=await body(req),cfg=b.config||{};await env.DB.prepare('INSERT INTO site_config(id,config_json,updated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET config_json=excluded.config_json,updated_at=excluded.updated_at').bind(JSON.stringify(cfg),now()).run();return json({ok:true})}catch(e){return json({error:e.message||'Could not save settings.'},500)}}
+ if(req.method==='GET'&&path==='/api/site-config'){const r=await env.DB.prepare('SELECT config_json FROM site_config WHERE id=1').first();return json({config:r?safeJson(r.config_json):null})}
+ if(req.method==='POST'&&path==='/api/guest-order'){
+  const b=await body(req),name=String(b.name||'').trim(),phone=cleanPhone(b.phone),address=String(b.address||'').trim(),pin=String(b.pin||'').trim(),items=Array.isArray(b.items)?b.items:[];
+  if(name.length<2||phone.length!==10||address.length<5||pin.length<4||!items.length)return json({error:'Name, mobile, full address, PIN and cart are required.'},400);
+  if(String(b.captchaAnswer||'')!==String(b.captchaExpected||''))return json({error:'CAPTCHA verification failed.'},400);
+  const screenshot=String(b.paymentScreenshot||'');if(screenshot&&screenshot.length>900000)return json({error:'Payment screenshot is too large. Please upload a smaller image.'},400);
   try{
-   await ensureGuestOrders(env);
-   const b=await body(req), name=String(b.name||'').trim(), phone=cleanPhone(b.phone), address=String(b.address||'').trim(), pin=String(b.pin||'').trim(), txn=String(b.txn||'').trim();
-   const items=Array.isArray(b.items)?b.items:[];
-   if(name.length<2||phone.length!==10||address.length<5||pin.length<4||!txn||!items.length)return json({error:'Required order details are missing.'},400);
-   const screenshot=String(b.paymentScreenshot||'');
-   if(screenshot.length>2200000)return json({error:'Payment screenshot is too large.'},400);
-   const orderNo='WB-PVC-'+Math.floor(100000+Math.random()*900000);
-   const receiptToken=randomToken();
-   await env.DB.prepare(`INSERT INTO guest_orders(order_no,receipt_token,name,phone,address,pin,items_json,subtotal,delivery,total,txn,payment_screenshot,payment_screenshot_name,doc_number,doc_file_name,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(orderNo,receiptToken,name,phone,address,pin,JSON.stringify(items),Number(b.subtotal)||0,Number(b.delivery)||0,Number(b.total)||0,txn,screenshot,String(b.paymentScreenshotName||''),String(b.docNumber||''),String(b.docFileName||''),'Payment Submitted',now()).run();
-   return json({ok:true,orderNo,receiptToken});
-  }catch(e){console.error(e);return json({error:'Could not save guest order.'},500)}
+   let c=await env.DB.prepare('SELECT id FROM customers WHERE phone=?').bind(phone).first();
+   if(!c){const random=crypto.randomUUID();const ph=await passwordHash(random);const r=await env.DB.prepare('INSERT INTO customers(name,phone,password_hash,password_salt,address,pin,created_at) VALUES(?,?,?,?,?,?,?)').bind(name,phone,ph.hash,ph.salt,address,pin,now()).run();c={id:r.meta.last_row_id}}else await env.DB.prepare('UPDATE customers SET name=?,address=?,pin=? WHERE id=?').bind(name,address,pin,c.id).run();
+   const orderNo='WB-PVC-'+Date.now().toString(36).toUpperCase();const total=Number(b.total)||0,subtotal=Number(b.subtotal)||0,delivery=Number(b.delivery)||0;
+   const orderData={customerName:name,phone,address,pin,items,subtotal,delivery,total,transactionId:String(b.transactionId||''),paymentScreenshot:screenshot,status:'Payment Submitted'};
+   await env.DB.prepare('INSERT INTO orders(order_no,customer_id,items_json,subtotal,delivery,total,status,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(orderNo,c.id,JSON.stringify(orderData),subtotal,delivery,total,'Payment Submitted',now()).run();
+   const receiptToken=randomToken();const receipt={orderNo,customerName:name,phone,address,pin,items,subtotal,delivery,total,transactionId:String(b.transactionId||''),status:'Payment Submitted',createdAt:now()};await env.DB.prepare('INSERT INTO guest_receipts(token,order_no,receipt_json,created_at) VALUES(?,?,?,?)').bind(receiptToken,orderNo,JSON.stringify(receipt),now()).run();
+   const wa=`New PVC Order ${orderNo}\nCustomer: ${name}\nMobile: ${phone}\nTotal: ₹${total}\nPayment UTR: ${String(b.transactionId||'Not provided')}\nStatus: Payment Submitted`;
+   const whatsappSent=await sendWhatsApp(env,wa);
+   return json({ok:true,orderNo,receiptToken,whatsappSent,status:'Payment Submitted'});
+  }catch(e){return json({error:e.message||'Could not create order.'},500)}
  }
- if(req.method==='GET'&&path==='/api/guest-receipt'){
-  try{await ensureGuestOrders(env);const token=String(url.searchParams.get('token')||'');if(!token)return json({error:'Receipt token missing.'},400);const o=await env.DB.prepare('SELECT order_no,name,phone,address,pin,items_json,subtotal,delivery,total,txn,status,created_at FROM guest_orders WHERE receipt_token=?').bind(token).first();if(!o)return json({error:'Receipt not found.'},404);return json({order:o},200,{'Cache-Control':'no-store'});}catch(e){return json({error:'Receipt unavailable.'},500)}
- }
- if(req.method==='GET'&&path==='/api/admin/guest-orders'){
-  try{await requireAdmin(req,env);await ensureGuestOrders(env);const r=await env.DB.prepare('SELECT id,order_no,name,phone,address,pin,items_json,subtotal,delivery,total,txn,payment_screenshot,payment_screenshot_name,doc_number,doc_file_name,status,created_at FROM guest_orders ORDER BY id DESC LIMIT 200').all();return json({orders:r.results||[]},200,{'Cache-Control':'no-store'});}catch(e){return json({error:'Owner login required.'},401)}
- }
- if(req.method==='POST'&&path==='/api/admin/login'){ if(rateLimit(req))return json({error:'Too many attempts. Please try again later.'},429); const b=await body(req), username=String(b.username||''), password=String(b.password||''); if(username!==ADMIN_USERNAME||!validPassword(password))return json({error:'Invalid owner credentials.'},401); try{ const admin=await ensureAdmin(env); const row=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(admin.id).first(); if(!row||!(await verifyPassword(password,row.password_salt,row.password_hash)))return json({error:'Invalid owner credentials.'},401); const token=randomToken(), th=b64(await sha256(token)), exp=new Date(Date.now()+12*60*60*1000).toISOString(); await env.DB.prepare('INSERT INTO admin_sessions(token_hash,admin_id,expires_at,created_at) VALUES(?,?,?,?)').bind(th,row.id,exp,now()).run(); return json({ok:true,username:row.username},200,{'Set-Cookie':adminCookie(token)}); }catch(e){return json({error:e.message||'Owner login failed.'},500);} }
- if(req.method==='GET'&&path==='/api/admin/me'){try{const a=await requireAdmin(req,env); return json({ok:true,username:a.username});}catch(e){return json({error:'Not logged in.'},401)}}
- if(req.method==='POST'&&path==='/api/admin/logout'){const token=getCookie(req,'admin_session'); if(token){await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash=?').bind(b64(await sha256(token))).run();} return json({ok:true},200,{'Set-Cookie':clearAdminCookie()});}
- if(req.method==='PUT'&&path==='/api/admin/password'){try{const a=await requireAdmin(req,env); const b=await body(req), current=String(b.currentPassword||''), next=String(b.newPassword||''); if(!validPassword(next))return json({error:'New password must be at least 8 characters.'},400); if(!(await verifyPassword(current,a.password_salt,a.password_hash)))return json({error:'Current password is incorrect.'},400); const ph=await passwordHash(next); await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=?,updated_at=? WHERE id=?').bind(ph.hash,ph.salt,now(),a.id).run(); return json({ok:true});}catch(e){return json({error:'Please login.'},401)}}
- if(req.method==='POST'&&path==='/api/auth/register'){ if(rateLimit(req))return json({error:'Too many attempts. Please try again later.'},429); const b=await body(req), name=String(b.name||'').trim(), phone=cleanPhone(b.phone), password=String(b.password||''); if(name.length<2||phone.length!==10||!validPassword(password))return json({error:'Name, valid 10-digit mobile and password (8+ characters) are required.'},400); const exists=await env.DB.prepare('SELECT id FROM customers WHERE phone=?').bind(phone).first(); if(exists)return json({error:'Account already exists. Please login.'},409); const ph=await passwordHash(password); const r=await env.DB.prepare('INSERT INTO customers(name,phone,password_hash,password_salt,address,pin,created_at) VALUES(?,?,?,?,?,?,?)').bind(name,phone,ph.hash,ph.salt,String(b.address||'').trim(),String(b.pin||'').trim(),now()).run(); const id=r.meta.last_row_id, token=randomToken(), th=b64(await sha256(token)), exp=new Date(Date.now()+SESSION_DAYS*86400000).toISOString(); await env.DB.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)').bind(th,id,exp,now()).run(); const u=await env.DB.prepare('SELECT id,name,phone,address,pin,created_at FROM customers WHERE id=?').bind(id).first(); return json({user:publicUser(u)},200,{'Set-Cookie':cookie('pvc_session',token,SESSION_DAYS*86400)}); }
- if(req.method==='POST'&&path==='/api/auth/login'){ if(rateLimit(req))return json({error:'Too many login attempts. Please try again later.'},429); const b=await body(req), phone=cleanPhone(b.phone), password=String(b.password||''); if(phone.length!==10||!password)return json({error:'Invalid login details.'},401); const u=await env.DB.prepare('SELECT * FROM customers WHERE phone=?').bind(phone).first(); if(!u||!(await verifyPassword(password,u.password_salt,u.password_hash)))return json({error:'Invalid mobile number or password.'},401); const token=randomToken(), th=b64(await sha256(token)), exp=new Date(Date.now()+SESSION_DAYS*86400000).toISOString(); await env.DB.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)').bind(th,u.id,exp,now()).run(); return json({user:publicUser(u)},200,{'Set-Cookie':cookie('pvc_session',token,SESSION_DAYS*86400)}); }
- if(req.method==='POST'&&path==='/api/auth/logout'){const token=getCookie(req,'pvc_session'); if(token){await env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(b64(await sha256(token))).run();} return json({ok:true},200,{'Set-Cookie':clearCookie('pvc_session')});}
- if(req.method==='GET'&&path==='/api/auth/me'){const u=await userFromSession(req,env); return json({user:publicUser(u)});}
- if(path==='/api/account/profile'&&(req.method==='PUT'||req.method==='PATCH')){try{const u=await requireUser(req,env); const b=await body(req); const name=String(b.name??u.name).trim(), address=String((b.address??u.address)||'').trim(), pin=String((b.pin??u.pin)||'').trim(); if(name.length<2)return json({error:'Name is required.'},400); await env.DB.prepare('UPDATE customers SET name=?,address=?,pin=? WHERE id=?').bind(name,address,pin,u.id).run(); const n=await env.DB.prepare('SELECT id,name,phone,address,pin,created_at FROM customers WHERE id=?').bind(u.id).first(); return json({user:publicUser(n)});}catch(e){return json({error:e.message==='UNAUTHORIZED'?'Please login.':'Unable to update profile.'},401)}}
- if(path==='/api/account/password'&&req.method==='PUT'){try{const u=await requireUser(req,env); const b=await body(req), old=String(b.currentPassword||''), next=String(b.newPassword||''); const row=await env.DB.prepare('SELECT * FROM customers WHERE id=?').bind(u.id).first(); if(!await verifyPassword(old,row.password_salt,row.password_hash))return json({error:'Current password is incorrect.'},400); if(!validPassword(next))return json({error:'New password must be at least 8 characters.'},400); const ph=await passwordHash(next); await env.DB.prepare('UPDATE customers SET password_hash=?,password_salt=? WHERE id=?').bind(ph.hash,ph.salt,u.id).run(); return json({ok:true});}catch(e){return json({error:'Please login.'},401)}}
- if(path==='/api/cart'&&req.method==='GET'){try{const u=await requireUser(req,env); const rows=await env.DB.prepare('SELECT product_id,quantity FROM carts WHERE user_id=? ORDER BY updated_at DESC').bind(u.id).all(); return json({items:rows.results||[]});}catch(e){return json({error:'Please login.'},401)}}
- if(path==='/api/cart'&&req.method==='PUT'){try{const u=await requireUser(req,env); const b=await body(req), items=Array.isArray(b.items)?b.items:[]; await env.DB.prepare('DELETE FROM carts WHERE user_id=?').bind(u.id).run(); for(const x of items){const pid=String(x.product_id||x.id||''), qty=Math.max(1,Math.min(999,Number(x.quantity||x.qty)||1)); if(pid)await env.DB.prepare('INSERT INTO carts(user_id,product_id,quantity,updated_at) VALUES(?,?,?,?)').bind(u.id,pid,qty,now()).run();} return json({ok:true});}catch(e){return json({error:'Please login.'},401)}}
- if(path==='/api/orders'&&req.method==='GET'){try{const u=await requireUser(req,env); const orders=await env.DB.prepare('SELECT * FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 100').bind(u.id).all(); return json({orders:orders.results||[]});}catch(e){return json({error:'Please login.'},401)}}
- if(path==='/api/orders'&&req.method==='POST'){try{const u=await requireUser(req,env); const b=await body(req), items=Array.isArray(b.items)?b.items:[]; if(!items.length)return json({error:'Cart is empty.'},400); const orderNo='WB-PVC-'+Math.floor(100000+Math.random()*900000); await env.DB.prepare('INSERT INTO orders(order_no,customer_id,items_json,subtotal,delivery,total,status,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(orderNo,u.id,JSON.stringify(items),Number(b.subtotal)||0,Number(b.delivery)||0,Number(b.total)||0,'Order Received',now()).run(); await env.DB.prepare('DELETE FROM carts WHERE user_id=?').bind(u.id).run(); return json({orderNo});}catch(e){return json({error:'Could not create order.'},500)}}
- if(path==='/api/feedback'&&req.method==='POST'){try{const u=await requireUser(req,env); const b=await body(req); await env.DB.prepare('INSERT INTO feedback(customer_id,type,message,created_at) VALUES(?,?,?,?)').bind(u.id,String(b.type||'feedback'),String(b.message||'').slice(0,2000),now()).run(); return json({ok:true});}catch(e){return json({error:'Please login.'},401)}}
+ if(req.method==='GET'&&path==='/api/receipt'){const token=new URL(req.url).searchParams.get('token')||'';if(!token)return json({error:'Missing receipt token.'},400);const r=await env.DB.prepare('SELECT receipt_json FROM guest_receipts WHERE token=?').bind(token).first();if(!r)return json({error:'Receipt not found.'},404);return json({receipt:safeJson(r.receipt_json)})}
  return null;
 }
-export default {async fetch(req,env){try{if(new URL(req.url).pathname.startsWith('/api/')){const r=await api(req,env); if(r)return r; return json({error:'Not found'},404);} return env.ASSETS.fetch(req);}catch(e){console.error(e);return json({error:'Server error'},500);}}};
+export default{async fetch(req,env){try{const p=new URL(req.url).pathname;if(p.startsWith('/api/')){const r=await api(req,env);if(r)return r;return json({error:'Not found'},404)}return env.ASSETS.fetch(req)}catch(e){console.error(e);return json({error:'Server error'},500)}}};
