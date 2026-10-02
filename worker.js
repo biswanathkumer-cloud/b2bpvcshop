@@ -18,14 +18,21 @@ function validPassword(p){return typeof p==='string'&&p.length>=8&&p.length<=128
 function cleanPhone(v){return String(v||'').replace(/\D/g,'').slice(-10)}
 function rateLimit(req){const ip=req.headers.get('CF-Connecting-IP')||'unknown',t=Date.now();let a=loginAttempts.get(ip)||[];a=a.filter(x=>t-x<15*60*1000);if(a.length>=LOGIN_LIMIT)return true;a.push(t);loginAttempts.set(ip,a);return false}
 async function body(req){try{return await req.json()}catch{return {}}}
+async function columnExists(env,table,column){
+ const r=await env.DB.prepare(`PRAGMA table_info(${table})`).all();
+ return (r.results||[]).some(x=>x.name===column);
+}
 async function ensureTables(env){
  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS guest_receipts(token TEXT PRIMARY KEY,order_no TEXT NOT NULL,receipt_json TEXT NOT NULL,created_at TEXT NOT NULL)`).run();
  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS site_config(id INTEGER PRIMARY KEY CHECK(id=1),config_json TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
+ // Older D1 schemas may not have updated_at. Add it only when missing.
+ if(await columnExists(env,'admins','updated_at')){} else { try{await env.DB.prepare(`ALTER TABLE admins ADD COLUMN updated_at TEXT`).run()}catch{} }
+ if(await columnExists(env,'site_config','updated_at')){} else { try{await env.DB.prepare(`ALTER TABLE site_config ADD COLUMN updated_at TEXT`).run()}catch{} }
 }
 async function requireAdmin(req,env){const token=getCookie(req,'admin_session');if(!token)throw new Error('UNAUTHORIZED');const th=b64(await sha256(token));const row=await env.DB.prepare('SELECT a.* FROM admins a JOIN admin_sessions s ON s.admin_id=a.id WHERE s.token_hash=? AND s.expires_at>?').bind(th,now()).first();if(!row)throw new Error('UNAUTHORIZED');return row}
-async function ensureAdmin(env,password){let row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(ADMIN_USERNAME).first();const initial=env.ADMIN_INITIAL_PASSWORD;if(!row){if(!initial||!validPassword(initial))throw new Error('ADMIN_INITIAL_PASSWORD secret is not configured.');const ph=await passwordHash(initial);await env.DB.prepare('INSERT INTO admins(username,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?)').bind(ADMIN_USERNAME,ph.hash,ph.salt,now(),now()).run();row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(ADMIN_USERNAME).first();}
+async function ensureAdmin(env,password){let row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(ADMIN_USERNAME).first();const initial=env.ADMIN_INITIAL_PASSWORD;if(!row){if(!initial||!validPassword(initial))throw new Error('ADMIN_INITIAL_PASSWORD secret is not configured.');const ph=await passwordHash(initial);await env.DB.prepare('INSERT INTO admins(username,password_hash,password_salt,created_at) VALUES(?,?,?,?)').bind(ADMIN_USERNAME,ph.hash,ph.salt,now()).run();row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(ADMIN_USERNAME).first();}
  if(!(await verifyPassword(password,row.password_salt,row.password_hash))){
-   if(initial&&password===initial){const ph=await passwordHash(initial);await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=?,updated_at=? WHERE id=?').bind(ph.hash,ph.salt,now(),row.id).run();row=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(row.id).first();}
+   if(initial&&password===initial){const ph=await passwordHash(initial);await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph.hash,ph.salt,row.id).run();row=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(row.id).first();}
  }
  return row;
 }
@@ -44,7 +51,7 @@ async function api(req,env){const path=new URL(req.url).pathname;
  }
  if(req.method==='GET'&&path==='/api/admin/me'){try{const a=await requireAdmin(req,env);return json({ok:true,username:a.username})}catch{return json({error:'Not logged in.'},401)}}
  if(req.method==='POST'&&path==='/api/admin/logout'){const t=getCookie(req,'admin_session');if(t)await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash=?').bind(b64(await sha256(t))).run();return json({ok:true},200,{'Set-Cookie':clearAdminCookie()})}
- if(req.method==='PUT'&&path==='/api/admin/password'){try{const a=await requireAdmin(req,env),b=await body(req),cur=String(b.currentPassword||''),next=String(b.newPassword||'');if(!validPassword(next))return json({error:'New password must be at least 8 characters.'},400);if(!(await verifyPassword(cur,a.password_salt,a.password_hash)))return json({error:'Current password is incorrect.'},400);const ph=await passwordHash(next);await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=?,updated_at=? WHERE id=?').bind(ph.hash,ph.salt,now(),a.id).run();return json({ok:true})}catch{return json({error:'Please login.'},401)}}
+ if(req.method==='PUT'&&path==='/api/admin/password'){try{const a=await requireAdmin(req,env),b=await body(req),cur=String(b.currentPassword||''),next=String(b.newPassword||'');if(!validPassword(next))return json({error:'New password must be at least 8 characters.'},400);if(!(await verifyPassword(cur,a.password_salt,a.password_hash)))return json({error:'Current password is incorrect.'},400);const ph=await passwordHash(next);await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph.hash,ph.salt,a.id).run();return json({ok:true})}catch{return json({error:'Please login.'},401)}}
  if(req.method==='GET'&&path==='/api/admin/orders'){try{await requireAdmin(req,env);const rows=await env.DB.prepare(`SELECT o.order_no,o.items_json,o.subtotal,o.delivery,o.total,o.status,o.created_at,c.name,c.phone,c.address,c.pin FROM orders o LEFT JOIN customers c ON c.id=o.customer_id ORDER BY o.created_at DESC LIMIT 200`).all();return json({orders:rows.results||[]})}catch{return json({error:'Please login.'},401)}}
  if(req.method==='PUT'&&path.startsWith('/api/admin/orders/')){try{await requireAdmin(req,env);const orderNo=decodeURIComponent(path.split('/').pop()),b=await body(req);await env.DB.prepare('UPDATE orders SET status=? WHERE order_no=?').bind(String(b.status||'Order Received'),orderNo).run();return json({ok:true})}catch{return json({error:'Please login.'},401)}}
  if(req.method==='GET'&&path==='/api/admin/site-config'){try{await requireAdmin(req,env);const r=await env.DB.prepare('SELECT config_json FROM site_config WHERE id=1').first();return json({config:r?safeJson(r.config_json):null})}catch{return json({error:'Please login.'},401)}}
