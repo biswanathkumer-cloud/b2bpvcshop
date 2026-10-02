@@ -3501,4 +3501,131 @@
 })();
 </script>
 
+<script>
+(function(){
+'use strict';
+const G='b2b_guest_verified_final';
+const legacyKeys=['wb_pvc_customer_session_v2','wb_pvc_customer_accounts_v2','customer_logged_in_phone','customer_logged_in_name','customer_logged_in_tracking','secure_customer_session','customer_session','customerToken'];
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+function guest(){try{const x=JSON.parse(sessionStorage.getItem(G)||'null');if(x&&Date.now()-Number(x.at||0)<2*60*60*1000)return x;sessionStorage.removeItem(G)}catch{}return null}
+function topGuest(){let n=document.getElementById('guestIdentityTop');const nav=document.querySelector('.nav-inner');if(!nav)return;if(!n){n=document.createElement('div');n.id='guestIdentityTop';n.style='display:flex;align-items:center;gap:7px;margin-left:10px;padding:7px 10px;border:1px solid #bbf7d0;border-radius:999px;background:#f0fdf4;color:#166534;font-size:12px;font-weight:700';nav.appendChild(n)}const g=guest();n.innerHTML=g?`👤 ${esc(g.name)} <span style="font-weight:500;color:#64748b">${esc(g.phone)}</span>`:'';n.style.display=g?'flex':'none'}
+function captcha(){return String(Math.floor(1000+Math.random()*9000))}
+function gate(action){const g=guest();if(g){topGuest();action&&action();return true}window.__finalGuestAction=action;let m=document.getElementById('finalGuestGate');if(!m){m=document.createElement('div');m.id='finalGuestGate';m.className='modal-overlay';m.style.display='none';m.innerHTML=`<div class="modal-card" style="max-width:430px"><div class="modal-header"><h3>🛒 Customer Verification</h3><button class="close-btn" id="finalGuestClose">×</button></div><p style="font-size:12px;color:#64748b;margin:0 0 14px">Customer account/login নেই। Add to Cart বা Buy Now করার আগে শুধু Name, Mobile এবং CAPTCHA verify করুন।</p><div class="form-group"><label>Customer Name *</label><input id="finalGuestName" placeholder="আপনার নাম"></div><div class="form-group"><label>Mobile Number *</label><input id="finalGuestPhone" maxlength="10" inputmode="numeric" placeholder="10 digit mobile"></div><div class="form-group"><label>CAPTCHA *</label><div style="display:flex;gap:8px;align-items:center"><b id="finalGuestCode" style="letter-spacing:4px;background:#e2e8f0;padding:9px 12px;border-radius:7px"></b><input id="finalGuestCaptcha" maxlength="4" inputmode="numeric" placeholder="Enter CAPTCHA"><button type="button" class="btn btn-light" id="finalGuestRefresh">↻</button></div></div><button type="button" class="btn btn-primary" id="finalGuestVerify" style="width:100%;justify-content:center">✅ Verify & Continue</button></div>`;document.body.appendChild(m);m.querySelector('#finalGuestClose').onclick=()=>{m.style.display='none';window.__finalGuestAction=null};m.querySelector('#finalGuestRefresh').onclick=()=>{window.__finalCaptcha=captcha();m.querySelector('#finalGuestCode').textContent=window.__finalCaptcha;m.querySelector('#finalGuestCaptcha').value=''};m.querySelector('#finalGuestVerify').onclick=()=>{const name=m.querySelector('#finalGuestName').value.trim(),phone=m.querySelector('#finalGuestPhone').value.replace(/\D/g,'').slice(-10),ans=m.querySelector('#finalGuestCaptcha').value.trim();if(name.length<2||phone.length!==10)return alert('Name এবং valid 10-digit mobile দিন।');if(ans!==String(window.__finalCaptcha))return alert('CAPTCHA ভুল।');const g={name,phone,at:Date.now(),captcha:window.__finalCaptcha};sessionStorage.setItem(G,JSON.stringify(g));m.style.display='none';topGuest();const a=window.__finalGuestAction;window.__finalGuestAction=null;if(typeof a==='function')setTimeout(a,0)};window.__finalCaptcha=captcha();m.querySelector('#finalGuestCode').textContent=window.__finalCaptcha}const n=m.querySelector('#finalGuestName'),p=m.querySelector('#finalGuestPhone');n.value='';p.value='';window.__finalCaptcha=captcha();m.querySelector('#finalGuestCode').textContent=window.__finalCaptcha;m.querySelector('#finalGuestCaptcha').value='';m.style.display='flex';return false}
+function clearLegacyCustomer(){legacyKeys.forEach(k=>{try{sessionStorage.removeItem(k)}catch{}try{localStorage.removeItem(k)}catch{}});document.querySelectorAll('#customerAuthNavBtn,#customerAuthModal,#customerAuthV2,#secureCustomerModal,#customerDashboardModal').forEach(e=>e&&e.remove());document.querySelectorAll('button,a').forEach(e=>{const t=(e.textContent||'').trim();if(/Customer Login|Customer Account|Create Account|My Account/i.test(t))e.remove()})}
+function ensureCartButton(){let nav=document.querySelector('.nav-actions');if(!nav)return;if(!document.getElementById('finalCartBtn')){const b=document.createElement('button');b.id='finalCartBtn';b.className='btn btn-primary';b.innerHTML='🛒 Cart (<span id="finalCartCount">0</span>)';b.onclick=()=>window.openCart&&window.openCart();nav.insertBefore(b,nav.firstChild)}const c=document.getElementById('finalCartCount');if(c)c.textContent=(window.shopCart||[]).reduce((n,x)=>n+Number(x.qty||0),0)}
+function ensureOwnerButton(){let nav=document.querySelector('.nav-actions');if(!nav)return;let b=document.getElementById('ownerPortalAccessBtn');if(b){b.style.display=isOwnerLoggedIn?'none':'inline-flex';b.textContent='🔐 Owner Login';b.onclick=triggerOwnerAccess;return}b=document.createElement('button');b.id='finalOwnerLogin';b.className='btn btn-light';b.textContent='🔐 Owner Login';b.onclick=triggerOwnerAccess;nav.appendChild(b)}
+function productButtons(card){return `<div class="final-product-actions" style="display:flex;gap:8px;margin-top:12px"><button type="button" class="btn btn-primary" style="flex:1;justify-content:center" onclick="addToCartV2('${String(card.id).replace(/'/g,"\\'")}')">🛒 Add to Cart</button><button type="button" class="btn btn-checkout" style="flex:1;justify-content:center" onclick="buyOneV2('${String(card.id).replace(/'/g,"\\'")}')">⚡ Buy Now</button></div>`}
+window.addToCartV2=function(id){gate(()=>{const c=(products||[]).find(x=>x.id===id);if(!c)return;const q=Math.max(1,Number((window.cardQtyMap||{})[id]||1));const old=window.shopCart.find(x=>x.id===id);if(old)old.qty=Math.min(999,old.qty+q);else window.shopCart.push({id,qty:q});saveCart();if(typeof renderCart==='function')renderCart();ensureCartButton();alert('✅ '+c.title+' cart-এ যোগ হয়েছে।')})}
+window.buyOneV2=function(id){gate(()=>{const c=(products||[]).find(x=>x.id===id);if(!c)return;const q=Math.max(1,Number((window.cardQtyMap||{})[id]||1));window.shopCart=[{id,qty:q}];saveCart();ensureCartButton();if(typeof window.startCartCheckout==='function')window.startCartCheckout(true)})}
+window.startCartCheckout=function(already){const go=()=>{if(!window.shopCart||!window.shopCart.length)return alert('Cart empty.');if(typeof closeV2Cart==='function')closeV2Cart();activeCartCheckout=true;activeOrderCard=null;const t=cartTotals();document.getElementById('mTitle').innerText=shopCart.map(x=>{const c=products.find(p=>p.id===x.id);return c?c.title+' × '+x.qty:''}).filter(Boolean).join(', ');document.getElementById('mQty').innerText=shopCart.reduce((n,x)=>n+x.qty,0)+' Piece(s)';document.getElementById('mNormalMRP').innerText='Rs. '+t.mrp;document.getElementById('mDiscountSaved').innerText='-Rs. '+t.save;document.getElementById('mDeliveryAmt').innerText=t.delivery?'Rs. '+t.delivery:'Free (Rs. 0)';document.getElementById('mTotal').innerText='Rs. '+t.total;const g=guest();document.getElementById('custName').value=g?.name||'';document.getElementById('custPhone').value=g?.phone||'';openModal('checkoutModal')};if(already&&guest())go();else gate(go)}
+window.openOrderModal=function(id){window.buyOneV2(id)}
+window.renderProductGrid=function(list){const grid=document.getElementById('productGrid');if(!grid)return;grid.innerHTML='';(list||[]).forEach((card,index)=>{if(!cardQtyMap[card.id])cardQtyMap[card.id]=1;const qty=cardQtyMap[card.id],normal=Number(card.normalPrice||card.price||0),price=Number(card.price||0),save=Math.max(0,(normal-price)*qty),discount=normal>price?Math.round((normal-price)/normal*100):0;const imgs=card.images&&card.images.length?card.images:[RealCardSvgs.swasthya];const item=document.createElement('div');item.className='product-card';item.id='card-wrapper-'+card.id;item.innerHTML=`${discount?`<span class="offer-discount-badge">🔥 ${discount}% OFF</span>`:''}<div class="card-photo-box"><div class="card-photo-frame"><img src="${imgs[0]}" alt=""></div></div><div class="card-body"><h4>${esc(card.title)}</h4><p>${esc(card.desc||'')}</p><div class="rate-qty-row"><div class="price-display-block"><div class="price-compare"><span class="final-price">Rs. ${price*qty}</span><span class="mrp-crossed">MRP: Rs. ${normal*qty}</span></div><span class="offer-save-tag">Save: Rs. ${save}</span></div><div class="qty-counter"><button type="button" onclick="modifyCardQty('${card.id}',-1,${price},${normal})">-</button><span id="qty-val-${card.id}">${qty}</span><button type="button" onclick="modifyCardQty('${card.id}',1,${price},${normal})">+</button></div></div>${productButtons(card)}<div class="admin-card-actions" style="display:${isOwnerLoggedIn?'flex':'none'}"><button class="btn btn-card-action" onclick="openEditProductModal('${card.id}')">✏️</button><button class="btn btn-card-action btn-danger" onclick="deleteCardProduct('${card.id}')">🗑️</button></div></div>`;grid.appendChild(item)})};
+function clean(){clearLegacyCustomer();ensureCartButton();ensureOwnerButton();topGuest();const g=guest();if(!g&&window.shopCart&&window.shopCart.length){window.shopCart=[];saveCart()}document.querySelectorAll('.final-product-actions').forEach(e=>e.style.display='flex');}
+window.addEventListener('load',()=>{clean();try{renderProductGrid(products)}catch{};setInterval(()=>{clean();try{renderProductGrid(products)}catch{}},2500)});setTimeout(clean,300);setTimeout(clean,1200);
+})();
+</script>
+
 </body></html>
+<script>
+/* FINAL OWNER/CUSTOMER SEPARATION PATCH
+   Owner = management only. Customer = shopping only. */
+(function(){
+  'use strict';
+  const style=document.createElement('style');
+  style.textContent=`
+    body.owner-session #finalCartBtn,
+    body.owner-session #cartNavBtn,
+    body.owner-session #guestIdentityTop,
+    body.owner-session .final-product-actions,
+    body.owner-session .customer-buy-actions,
+    body.owner-session #guestGateModal,
+    body.owner-session #finalGuestGate,
+    body.owner-session #v2CartModal,
+    body.owner-session #checkoutModal { display:none !important; }
+    body.owner-session .owner-only-card-note { display:block !important; }
+    .owner-only-card-note{display:none;margin-top:10px;padding:8px;border-radius:8px;background:#eff6ff;color:#1e3a8a;font-size:12px;font-weight:700;text-align:center}
+  `;
+  document.head.appendChild(style);
+
+  function hideCustomerSideForOwner(){
+    if(!isOwnerLoggedIn) return;
+    ['finalCartBtn','cartNavBtn','guestIdentityTop','finalGuestGate','customerAuthV2','customerAuthModal','secureCustomerModal','customerDashboardModal','v2CartModal','checkoutModal'].forEach(id=>{
+      const el=document.getElementById(id); if(el) el.style.setProperty('display','none','important');
+    });
+  }
+
+  window.renderProductGrid=function(list){
+    const grid=document.getElementById('productGrid'); if(!grid)return;
+    grid.innerHTML='';
+    (list||[]).forEach((card,index)=>{
+      const normal=Number(card.normalPrice||card.price||0), price=Number(card.price||0);
+      const discount=normal>price?Math.round((normal-price)/normal*100):0;
+      const imgs=card.images&&card.images.length?card.images:[RealCardSvgs.swasthya];
+      const item=document.createElement('div');
+      item.className='product-card'; item.id='card-wrapper-'+card.id;
+      if(isOwnerLoggedIn){
+        item.innerHTML=`
+          ${discount?`<span class="offer-discount-badge">🔥 ${discount}% OFF</span>`:''}
+          <div class="card-photo-box"><div class="card-photo-frame"><img src="${imgs[0]}" alt="${esc(card.title)}"></div></div>
+          <div class="card-body">
+            <h4>${esc(card.title)}</h4>
+            <p>${esc(card.desc||'')}</p>
+            <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:10px">
+              <div><div style="font-size:20px;font-weight:800">Offer ₹${price}</div><div style="text-decoration:line-through;color:#64748b">MRP ₹${normal}</div></div>
+              <span style="font-size:12px;color:#475569">Owner view</span>
+            </div>
+            <div class="owner-only-card-note">🛡️ Owner mode: customer Add to Cart / Buy Now / verification are disabled here.</div>
+            <div class="admin-card-actions" style="display:flex!important;margin-top:12px;gap:7px">
+              <button class="btn btn-card-action" onclick="openEditProductModal('${String(card.id).replace(/'/g,"\\'")}')">✏️ Edit</button>
+              <button class="btn btn-card-action btn-danger" onclick="deleteCardProduct('${String(card.id).replace(/'/g,"\\'")}')">🗑️ Delete</button>
+            </div>
+          </div>`;
+      }else{
+        if(!cardQtyMap[card.id])cardQtyMap[card.id]=1;
+        const qty=cardQtyMap[card.id];
+        const unit=typeof unitPrice==='function'?unitPrice(card,qty):price;
+        const save=Math.max(0,(normal-unit)*qty);
+        item.innerHTML=`
+          ${discount?`<span class="offer-discount-badge">🔥 ${discount}% OFF</span>`:''}
+          <div class="card-photo-box"><div class="card-photo-frame"><img src="${imgs[0]}" alt="${esc(card.title)}"></div></div>
+          <div class="card-body">
+            <h4>${esc(card.title)}</h4><p>${esc(card.desc||'')}</p>
+            <div class="rate-qty-row">
+              <div class="price-display-block"><div class="price-compare"><span class="final-price">₹${unit*qty}</span><span class="mrp-crossed">MRP: ₹${normal*qty}</span></div><span class="offer-save-tag">Save: ₹${save}</span></div>
+              <div class="qty-counter"><button type="button" onclick="modifyCardQtyV2('${String(card.id).replace(/'/g,"\\'")}',-1)">−</button><span id="qty-val-${card.id}">${qty}</span><button type="button" onclick="modifyCardQtyV2('${String(card.id).replace(/'/g,"\\'")}',1)">+</button></div>
+            </div>
+            <div class="final-product-actions customer-buy-actions" style="display:flex;gap:8px;margin-top:12px">
+              <button type="button" class="btn btn-primary" style="flex:1;justify-content:center" onclick="addToCartV2('${String(card.id).replace(/'/g,"\\'")}')">🛒 Add to Cart</button>
+              <button type="button" class="btn btn-checkout" style="flex:1;justify-content:center" onclick="buyOneV2('${String(card.id).replace(/'/g,"\\'")}')">⚡ Buy Now</button>
+            </div>
+          </div>`;
+      }
+      grid.appendChild(item);
+    });
+    if(typeof updateCartBadge==='function')updateCartBadge();
+    hideCustomerSideForOwner();
+  };
+
+  const oldOpenCart=window.openCart;
+  window.openCart=function(){ if(isOwnerLoggedIn){alert('Owner mode-এ Cart/Buy ব্যবহার করা যাবে না। Customer public view-তে কিনবে।');return;} return oldOpenCart&&oldOpenCart(); };
+  const oldStartCheckout=window.startCartCheckout;
+  window.startCartCheckout=function(){ if(isOwnerLoggedIn){alert('Owner mode-এ purchase করা যাবে না।');return;} return oldStartCheckout&&oldStartCheckout.apply(this,arguments); };
+
+  function enforce(){
+    document.body.classList.toggle('owner-session',!!isOwnerLoggedIn);
+    if(isOwnerLoggedIn){
+      const g=document.getElementById('guestIdentityTop'); if(g)g.style.setProperty('display','none','important');
+      const c=document.getElementById('finalCartBtn'); if(c)c.style.setProperty('display','none','important');
+      renderProductGrid(products);
+    }
+  }
+  const oldUpdate=window.updateAuthUI;
+  window.updateAuthUI=function(){
+    if(typeof oldUpdate==='function')oldUpdate.apply(this,arguments);
+    enforce();
+  };
+  setTimeout(enforce,500);
+  setTimeout(enforce,1500);
+  setInterval(enforce,2500);
+})();
+</script>
