@@ -1,2 +1,0 @@
-Owner username: owner
-Owner password: use the existing Cloudflare ADMIN_INITIAL_PASSWORD secret. Do not put the password in GitHub.
