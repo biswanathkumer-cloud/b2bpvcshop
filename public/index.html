@@ -3269,5 +3269,114 @@
   setTimeout(()=>{cleanOld();if(!Array.isArray(products)||!products.length){products=officialWBCards.slice();saveProducts();}renderClean(products||[]);ensureNav();},400);
 })();
 </script>
+
+<script>
+/* ===== OWNER CONTROL + PAYMENT SETTINGS + CUSTOMER PROFILE ===== */
+(function(){
+  const GUEST_KEY='b2b_guest_verified_v4';
+  const CART_KEY='b2b_guest_cart_v4';
+  let ownerTimer=null;
+
+  function owner(){return !!window.isOwnerLoggedIn;}
+  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+  function guest(){try{return JSON.parse(sessionStorage.getItem(GUEST_KEY)||'null')}catch(e){return null}}
+  function cart(){try{return JSON.parse(sessionStorage.getItem(CART_KEY)||'[]')}catch(e){return []}}
+  function serverSave(){
+    if(!owner()) return;
+    const cfg={...masterSettings,products:Array.isArray(window.products)?window.products:[]};
+    fetch('/api/admin/site-config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})}).catch(()=>{});
+  }
+  function serverLoad(){
+    fetch('/api/site-config').then(r=>r.ok?r.json():null).then(d=>{
+      const c=d&&d.config;if(!c)return;
+      if(c.products&&Array.isArray(c.products)&&c.products.length){window.products=c.products;try{saveProducts()}catch(e){}}
+      Object.keys(c).forEach(k=>{if(k!=='products')masterSettings[k]=c[k]});
+      try{saveSettings();applySettings()}catch(e){}
+      if(typeof window.renderProductGrid==='function')window.renderProductGrid(window.products||[]);
+    }).catch(()=>{});
+  }
+
+  function hideCustomerFromOwner(){
+    if(!owner())return;
+    ['guestIdentityBar','cartNavBtn','guestCartModal','guestVerifyModal','guestProfileModal','checkoutModal','orderSuccessModal'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.display='none';});
+    document.querySelectorAll('.nav-actions button').forEach(b=>{if(/cart|customer|profile|order|buy now|add to cart/i.test(b.textContent||'')) b.style.display='none';});
+  }
+
+  function customerProfile(){
+    const g=guest(); if(!g)return alert('আগে Customer Verification করুন।');
+    let m=document.getElementById('guestProfileModal');
+    if(!m){m=document.createElement('div');m.className='modal-overlay';m.id='guestProfileModal';m.innerHTML=`<div class="modal-card" style="max-width:520px"><div class="modal-header"><h3>👤 Customer Profile</h3><button class="close-btn" onclick="closeModal('guestProfileModal')">×</button></div><div id="guestProfileBody"></div></div>`;document.body.appendChild(m)}
+    document.getElementById('guestProfileBody').innerHTML=`<div style="background:#eff6ff;padding:16px;border-radius:12px"><b>${esc(g.name)}</b><br>📱 ${esc(g.mobile)}<br><small>Customer verification active</small></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:15px"><button class="btn btn-primary" onclick="closeModal('guestProfileModal');openGuestCart()">🛒 My Cart</button><button class="btn btn-danger" onclick="customerGuestLogout()">🚪 Logout</button></div>`;
+    openModal('guestProfileModal');
+  }
+  window.openCustomerProfile=customerProfile;
+  window.customerGuestLogout=function(){sessionStorage.removeItem(GUEST_KEY);sessionStorage.removeItem(CART_KEY);document.getElementById('guestProfileModal')?.remove();document.getElementById('guestIdentityBar')?.remove();document.getElementById('cartNavBtn')?.remove();alert('✅ Customer logout successful.');location.reload();};
+
+  function ensureCustomerProfileButton(){
+    if(owner())return;
+    const nav=document.querySelector('.nav-actions');if(!nav)return;
+    const g=guest();let b=document.getElementById('customerProfileBtn');
+    if(g){if(!b){b=document.createElement('button');b.id='customerProfileBtn';b.className='btn btn-light';b.type='button';nav.insertBefore(b,nav.firstChild)}b.textContent='👤 '+g.name+' • '+g.mobile;b.onclick=customerProfile;}
+    else if(b)b.remove();
+  }
+
+  function addOwnerSettingsButton(){
+    const tools=document.querySelector('.owner-nav-tools');if(!tools||document.getElementById('ownerPaymentSettingsBtn'))return;
+    const b=document.createElement('button');b.id='ownerPaymentSettingsBtn';b.className='owner-btn owner-btn-special';b.textContent='💰 Price • Delivery • QR';b.onclick=openOwnerPaymentSettings;tools.insertBefore(b,tools.firstChild);
+  }
+
+  function openOwnerPaymentSettings(){
+    if(!owner()){return triggerOwnerAccess();}
+    let m=document.getElementById('ownerPaymentSettingsModal');
+    if(!m){m=document.createElement('div');m.className='modal-overlay';m.id='ownerPaymentSettingsModal';m.innerHTML=`<div class="modal-card" style="max-width:760px"><div class="modal-header"><h3>💰 Pricing • Delivery • Payment QR</h3><button class="close-btn" onclick="closeModal('ownerPaymentSettingsModal')">×</button></div><p style="color:#64748b;margin-top:0">এখান থেকে প্রতিটি product-এর quantity-wise offer price, delivery charge, UPI ID এবং customer payment QR বদলাতে পারবেন।</p><div class="form-group"><label>Product</label><select id="opsProduct"></select></div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px"><div class="form-group"><label>1+ Price</label><input id="ops1" type="number"></div><div class="form-group"><label>5+ Price</label><input id="ops5" type="number"></div><div class="form-group"><label>10+ Price</label><input id="ops10" type="number"></div><div class="form-group"><label>25+ Price</label><input id="ops25" type="number"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="form-group"><label>Delivery Charge (₹)</label><input id="opsDelivery" type="number" min="0"></div><div class="form-group"><label>UPI ID</label><input id="opsUpi" placeholder="example@upi"></div></div><div class="form-group"><label>Payment QR Code Upload</label><input id="opsQr" type="file" accept="image/png,image/jpeg,image/webp"><div id="opsQrPreview" style="margin-top:8px"></div></div><button class="btn btn-primary" style="width:100%" onclick="saveOwnerPaymentSettings()">💾 Save All Payment & Pricing Settings</button></div>`;document.body.appendChild(m);document.getElementById('opsProduct').addEventListener('change',loadOwnerProductSettings);document.getElementById('opsQr').addEventListener('change',function(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{document.getElementById('opsQrPreview').innerHTML='<img src="'+r.result+'" style="width:150px;height:150px;object-fit:contain;border:1px solid #ddd;border-radius:10px">';m.dataset.qr=r.result};r.readAsDataURL(f);});}
+    const sel=document.getElementById('opsProduct');sel.innerHTML=(window.products||[]).map(p=>`<option value="${esc(p.id)}">${esc(p.title)}</option>`).join('');
+    document.getElementById('opsDelivery').value=Number(masterSettings.deliveryFee||0);document.getElementById('opsUpi').value=masterSettings.upiId||'';m.dataset.qr=masterSettings.qrCode||'';document.getElementById('opsQrPreview').innerHTML=masterSettings.qrCode?'<img src="'+masterSettings.qrCode+'" style="width:150px;height:150px;object-fit:contain;border:1px solid #ddd;border-radius:10px">':'<span style="color:#64748b">No uploaded QR yet.</span>';loadOwnerProductSettings();openModal('ownerPaymentSettingsModal');
+  }
+  window.openOwnerPaymentSettings=openOwnerPaymentSettings;
+  function loadOwnerProductSettings(){const id=document.getElementById('opsProduct')?.value,p=(window.products||[]).find(x=>x.id===id);if(!p)return;const t=Array.isArray(p.bulkTiers)?p.bulkTiers:[];const get=n=>{const x=t.find(a=>Number(a.min)===n);return x?Number(x.price):Number(p.price||0)};document.getElementById('ops1').value=get(1);document.getElementById('ops5').value=get(5);document.getElementById('ops10').value=get(10);document.getElementById('ops25').value=get(25);}
+  window.saveOwnerPaymentSettings=function(){
+    if(!owner())return alert('Owner login required.');
+    const id=document.getElementById('opsProduct').value,p=(window.products||[]).find(x=>x.id===id);if(!p)return;
+    p.price=Number(document.getElementById('ops1').value)||p.price;p.bulkTiers=[{min:1,price:Number(document.getElementById('ops1').value)||p.price},{min:5,price:Number(document.getElementById('ops5').value)||p.price},{min:10,price:Number(document.getElementById('ops10').value)||p.price},{min:25,price:Number(document.getElementById('ops25').value)||p.price}];masterSettings.deliveryFee=Number(document.getElementById('opsDelivery').value)||0;masterSettings.upiId=document.getElementById('opsUpi').value.trim();masterSettings.qrCode=document.getElementById('ownerPaymentSettingsModal').dataset.qr||masterSettings.qrCode||'';saveProducts();saveSettings();serverSave();applySettings();if(typeof renderProductGrid==='function')renderProductGrid(products);closeModal('ownerPaymentSettingsModal');alert('✅ Price, quantity offers, delivery charge and payment QR saved.');
+  };
+
+  function setQr(){
+    const img=document.getElementById('upiQrImg');if(!img)return;const total=Number((document.getElementById('mTotal')?.innerText||'').replace(/[^0-9.]/g,''))||0;
+    if(masterSettings.qrCode){img.src=masterSettings.qrCode;return;}
+    const upi=masterSettings.upiId||'';img.src=`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(`upi://pay?pa=${upi}&pn=${masterSettings.name||'B2B PVC PRINTING SHOP'}&am=${total}&cu=INR`)}`;
+  }
+  function addScreenshotField(){const txn=document.getElementById('custTxn');if(!txn||document.getElementById('custPaymentShot'))return;const wrap=txn.closest('.form-group')||txn.parentElement;const d=document.createElement('div');d.className='form-group';d.innerHTML='<label>Payment Screenshot (optional if Transaction ID given)</label><input id="custPaymentShot" type="file" accept="image/png,image/jpeg,image/webp">';wrap.parentElement.appendChild(d);}
+
+  // Use the secure worker guest-order endpoint so Owner gets the real purchase record and WhatsApp notification.
+  window.handlePlaceOrder=async function(e){
+    e.preventDefault();
+    const name=document.getElementById('custName').value.trim(),phone=document.getElementById('custPhone').value.replace(/\D/g,'').slice(-10),address=document.getElementById('custAddress').value.trim(),pin=document.getElementById('custPin').value.trim(),txn=document.getElementById('custTxn').value.trim();
+    if(name.length<2||phone.length!==10||address.length<5||pin.length<4)return alert('Name, mobile, full address and PIN দিন।');
+    const g=guest();if(!g||g.name!==name||g.mobile!==phone)return alert('Customer verification আবার করুন।');
+    const shot=document.getElementById('custPaymentShot');let screenshot='';
+    if(shot?.files?.[0]){if(shot.files[0].size>650000)return alert('Screenshot ছোট করুন (650KB-এর মধ্যে)।');screenshot=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(shot.files[0])});}
+    if(!txn&&!screenshot)return alert('Transaction ID অথবা Payment Screenshot দিন।');
+    const items=cart().map(x=>{const c=(window.products||[]).find(p=>p.id===x.id),u=(function(){let z=Number(c.price||0);(Array.isArray(c.bulkTiers)?c.bulkTiers:[]).slice().sort((a,b)=>a.min-b.min).forEach(t=>{if(x.qty>=Number(t.min))z=Number(t.price)});return z})();return{id:c.id,title:c.title,quantity:x.qty,unitPrice:u,total:u*x.qty}});
+    const subtotal=items.reduce((s,i)=>s+i.total,0),delivery=Number(masterSettings.deliveryFee||0),total=subtotal+delivery;
+    const capExpected=document.getElementById('guestCaptchaText')?.textContent||'';
+    const btn=e.submitter||document.querySelector('#checkoutModal button[type="submit"]');if(btn)btn.disabled=true;
+    try{const r=await fetch('/api/guest-order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,address,pin,items,subtotal,delivery,total,transactionId:txn,paymentScreenshot:screenshot,captchaAnswer:capExpected,captchaExpected:capExpected})});const d=await r.json().catch(()=>({}));if(!r.ok||!d.ok)throw new Error(d.error||'Order failed.');sessionStorage.removeItem(CART_KEY);closeModal('checkoutModal');const g2=guest();document.getElementById('successTrackingId')&&(document.getElementById('successTrackingId').textContent=d.orderNo||'');document.getElementById('successWhatsappLink')&&(document.getElementById('successWhatsappLink').style.display='none');if(document.getElementById('orderSuccessModal'))openModal('orderSuccessModal');alert('✅ Purchase submitted successfully. Receipt token generated.');}
+    catch(err){alert('❌ '+err.message)}finally{if(btn)btn.disabled=false;}
+  };
+
+  // Keep QR/payment data current whenever checkout opens.
+  const oldGuestCheckout=window.guestCheckout;
+  window.guestCheckout=function(){if(typeof oldGuestCheckout==='function')oldGuestCheckout();setTimeout(()=>{addScreenshotField();setQr();},50);};
+
+  function refresh(){
+    if(owner()){hideCustomerFromOwner();addOwnerSettingsButton();}
+    else {ensureCustomerProfileButton();}
+  }
+  serverLoad();
+  refresh();
+  ownerTimer=setInterval(refresh,500);
+})();
+</script>
+
 </body>
 </html>
