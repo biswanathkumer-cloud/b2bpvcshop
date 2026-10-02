@@ -1,6 +1,0 @@
-1) GitHub repository: biswanathkumer-cloud/b2bpvcshop
-2) Keep public/index.html exactly as supplied in this package.
-3) Upload worker.js and wrangler.jsonc to repository root.
-4) Cloudflare build/deploy command: npx wrangler deploy
-5) Do NOT use Cloudflare Edit code / manual editor.
-6) Keep ADMIN_INITIAL_PASSWORD as a Cloudflare secret.
