@@ -19,6 +19,30 @@ function cleanPhone(v){return String(v||'').replace(/\D/g,'').slice(-10)}
 function validPassword(p){return typeof p==='string' && p.length>=8 && p.length<=128}
 function now(){return new Date().toISOString()}
 async function body(req){try{return await req.json()}catch{return {}}}
+
+async function ensureGuestOrders(env){
+ await env.DB.prepare(`CREATE TABLE IF NOT EXISTS guest_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_no TEXT NOT NULL UNIQUE,
+  receipt_token TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  address TEXT NOT NULL,
+  pin TEXT NOT NULL,
+  items_json TEXT NOT NULL,
+  subtotal REAL NOT NULL DEFAULT 0,
+  delivery REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  txn TEXT NOT NULL,
+  payment_screenshot TEXT,
+  payment_screenshot_name TEXT,
+  doc_number TEXT,
+  doc_file_name TEXT,
+  status TEXT NOT NULL DEFAULT 'Payment Submitted',
+  created_at TEXT NOT NULL
+ )`).run();
+}
+
 async function userFromSession(req,env){const token=getCookie(req,'pvc_session'); if(!token)return null; const digest=await sha256(token); const hash=b64(digest); const row=await env.DB.prepare(`SELECT u.id,u.name,u.phone,u.address,u.pin,u.created_at FROM sessions s JOIN customers u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?`).bind(hash,now()).first(); return row||null;}
 function publicUser(u){return u?{id:u.id,name:u.name,phone:u.phone,address:u.address||'',pin:u.pin||'',createdAt:u.created_at}:null}
 async function requireUser(req,env){const u=await userFromSession(req,env); if(!u) throw new Error('UNAUTHORIZED'); return u;}
@@ -27,6 +51,27 @@ async function requireAdmin(req,env){ const token=getCookie(req,'admin_session')
 async function ensureAdmin(env){ const existing=await env.DB.prepare('SELECT id FROM admins WHERE username=?').bind(ADMIN_USERNAME).first(); if(existing)return existing; const initial=env.ADMIN_INITIAL_PASSWORD; if(!initial||!validPassword(initial))throw new Error('ADMIN_INITIAL_PASSWORD secret is not configured.'); const ph=await passwordHash(initial); const r=await env.DB.prepare('INSERT INTO admins(username,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?)').bind(ADMIN_USERNAME,ph.hash,ph.salt,now(),now()).run(); return {id:r.meta.last_row_id,username:ADMIN_USERNAME}; }
 async function api(req,env){
  const url=new URL(req.url), path=url.pathname;
+
+ if(req.method==='POST'&&path==='/api/guest-orders'){
+  try{
+   await ensureGuestOrders(env);
+   const b=await body(req), name=String(b.name||'').trim(), phone=cleanPhone(b.phone), address=String(b.address||'').trim(), pin=String(b.pin||'').trim(), txn=String(b.txn||'').trim();
+   const items=Array.isArray(b.items)?b.items:[];
+   if(name.length<2||phone.length!==10||address.length<5||pin.length<4||!txn||!items.length)return json({error:'Required order details are missing.'},400);
+   const screenshot=String(b.paymentScreenshot||'');
+   if(screenshot.length>2200000)return json({error:'Payment screenshot is too large.'},400);
+   const orderNo='WB-PVC-'+Math.floor(100000+Math.random()*900000);
+   const receiptToken=randomToken();
+   await env.DB.prepare(`INSERT INTO guest_orders(order_no,receipt_token,name,phone,address,pin,items_json,subtotal,delivery,total,txn,payment_screenshot,payment_screenshot_name,doc_number,doc_file_name,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(orderNo,receiptToken,name,phone,address,pin,JSON.stringify(items),Number(b.subtotal)||0,Number(b.delivery)||0,Number(b.total)||0,txn,screenshot,String(b.paymentScreenshotName||''),String(b.docNumber||''),String(b.docFileName||''),'Payment Submitted',now()).run();
+   return json({ok:true,orderNo,receiptToken});
+  }catch(e){console.error(e);return json({error:'Could not save guest order.'},500)}
+ }
+ if(req.method==='GET'&&path==='/api/guest-receipt'){
+  try{await ensureGuestOrders(env);const token=String(url.searchParams.get('token')||'');if(!token)return json({error:'Receipt token missing.'},400);const o=await env.DB.prepare('SELECT order_no,name,phone,address,pin,items_json,subtotal,delivery,total,txn,status,created_at FROM guest_orders WHERE receipt_token=?').bind(token).first();if(!o)return json({error:'Receipt not found.'},404);return json({order:o},200,{'Cache-Control':'no-store'});}catch(e){return json({error:'Receipt unavailable.'},500)}
+ }
+ if(req.method==='GET'&&path==='/api/admin/guest-orders'){
+  try{await requireAdmin(req,env);await ensureGuestOrders(env);const r=await env.DB.prepare('SELECT id,order_no,name,phone,address,pin,items_json,subtotal,delivery,total,txn,payment_screenshot,payment_screenshot_name,doc_number,doc_file_name,status,created_at FROM guest_orders ORDER BY id DESC LIMIT 200').all();return json({orders:r.results||[]},200,{'Cache-Control':'no-store'});}catch(e){return json({error:'Owner login required.'},401)}
+ }
  if(req.method==='POST'&&path==='/api/admin/login'){ if(rateLimit(req))return json({error:'Too many attempts. Please try again later.'},429); const b=await body(req), username=String(b.username||''), password=String(b.password||''); if(username!==ADMIN_USERNAME||!validPassword(password))return json({error:'Invalid owner credentials.'},401); try{ const admin=await ensureAdmin(env); const row=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(admin.id).first(); if(!row||!(await verifyPassword(password,row.password_salt,row.password_hash)))return json({error:'Invalid owner credentials.'},401); const token=randomToken(), th=b64(await sha256(token)), exp=new Date(Date.now()+12*60*60*1000).toISOString(); await env.DB.prepare('INSERT INTO admin_sessions(token_hash,admin_id,expires_at,created_at) VALUES(?,?,?,?)').bind(th,row.id,exp,now()).run(); return json({ok:true,username:row.username},200,{'Set-Cookie':adminCookie(token)}); }catch(e){return json({error:e.message||'Owner login failed.'},500);} }
  if(req.method==='GET'&&path==='/api/admin/me'){try{const a=await requireAdmin(req,env); return json({ok:true,username:a.username});}catch(e){return json({error:'Not logged in.'},401)}}
  if(req.method==='POST'&&path==='/api/admin/logout'){const token=getCookie(req,'admin_session'); if(token){await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash=?').bind(b64(await sha256(token))).run();} return json({ok:true},200,{'Set-Cookie':clearAdminCookie()});}

@@ -1,20 +1,21 @@
-B2B PVC PRINTING SHOP — CHECKED PACKAGE
+B2B PVC PRINTING SHOP — FINAL GUEST CHECKOUT PACKAGE
 
-এই প্যাকেজে:
-1. Original 14 product data/images রাখা হয়েছে।
-2. Customer account/login gate সরানো হয়েছে।
-3. Purchase-এর আগে simple CAPTCHA আছে।
-4. Checkout-এ customer name, mobile, address, PIN, transaction ID এবং payment screenshot field আছে।
-5. Quantity-wise pricing editor আগের মতো রাখা হয়েছে।
-6. Owner login/backend code রাখা হয়েছে।
-7. Worker PBKDF2 100000 iterations করা হয়েছে।
-8. Wrangler-এ keep_vars=true রাখা হয়েছে।
+এই package-এ:
+1. Customer Login / Create Account নেই।
+2. Purchase-এর আগে Name + Mobile + CAPTCHA verification আছে।
+3. নতুন visitor-এর cart fresh/empty থাকে; পুরনো visitor-এর cart public page-এ carry হয় না।
+4. অন্য customer-এর personal details বা order history public page-এ দেখানো হয় না।
+5. Checkout-এ Name, Mobile, Full Address, PIN, Transaction ID এবং Payment Screenshot upload আছে।
+6. Purchase receipt / bill print-save করা যায়।
+7. Quantity-wise offer price এবং discount display/editor রাখা হয়েছে।
+8. Delivery amount owner settings থেকে set করা যায়।
+9. Guest order Worker + D1-এ private guest_orders table-এ save হয়।
+10. Payment screenshot public URL হিসেবে serve করা হয় না।
+11. Owner API দিয়ে guest orders protected ভাবে নেওয়া যায়।
 
-GitHub structure:
-public/index.html
-worker.js
-wrangler.jsonc
+DEPLOY:
+- GitHub repo-তে public/index.html, worker.js, wrangler.jsonc রাখুন।
+- Cloudflare Worker deploy করুন।
 
-Cloudflare deploy: npx wrangler deploy
-
-নোট: WhatsApp automatic server notification এবং private payment-file storage-এর জন্য WhatsApp Business API/R2 configuration আলাদা করে করতে হবে; এই package user-এর কোনো secret/password নেয় না।
+IMPORTANT:
+Automatic WhatsApp API notification চালাতে WhatsApp Business Cloud API credentials Cloudflare secret/vars হিসেবে আলাদা করে configure করতে হবে। কোনো password/API secret এই file-এ রাখা হয়নি।
