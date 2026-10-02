@@ -1,26 +1,10 @@
-B2B PVC PRINTING SHOP - FINAL FIXED PACKAGE
+B2B PVC PRINTING SHOP - FINAL CLEAN GUEST/OWNER BUILD
 
-1. Customer Login / Create Account নেই.
-2. Customer Name + Mobile + CAPTCHA verify করে Add to Cart করতে পারে.
-3. নতুন browser session-এ customer cart fresh থাকে.
-4. Checkout-এ Name, Mobile, Address, PIN, Transaction ID, Payment Screenshot নেওয়া হয়.
-5. Private receipt token দিয়ে receipt পাওয়া যায়; Print / Save as PDF করা যায়.
-6. Owner Login server-side secure.
-7. Quantity-wise offers এবং time-based offers owner panel থেকে update করা যায়.
-8. Product card-এর নিচে Bulk Offer text দেখানো হয় না.
-9. Upcoming offer notification দেখা যায়.
-10. Poster settings live-save করার জন্য admin site-config endpoint আছে.
-11. Owner orders private server-side endpoint-এ থাকে.
-12. WhatsApp automatic notification-এর জন্য Cloudflare Worker secrets লাগবে:
-   WHATSAPP_ACCESS_TOKEN
-   WHATSAPP_PHONE_NUMBER_ID
-   WHATSAPP_OWNER_NUMBER
-   এগুলো chat-এ কখনও পাঠাবেন না.
-
-Deploy:
-  npx wrangler deploy
-
-Cloudflare Secret:
-  ADMIN_INITIAL_PASSWORD (কমপক্ষে 8 character)
-
-Note: Payment screenshot-এর জন্য ছোট image ব্যবহার করুন. Current implementation 650KB-এর মধ্যে রাখে.
+1. Upload the CONTENTS of this folder to GitHub repo root.
+2. Keep public/index.html, worker.js and wrangler.jsonc exactly at these paths.
+3. Deploy the Cloudflare Worker.
+4. Customer has NO account/login. Customer verification appears only after Add to Cart or Buy Now: Name + Mobile + CAPTCHA.
+5. After verification the selected action continues automatically; customer name/mobile appears at the top.
+6. Owner Login is a separate button at the top-right. Owner password is never stored in HTML.
+7. Worker no longer depends on D1 updated_at columns for owner login/site config.
+8. Automatic WhatsApp notification requires the three WhatsApp secrets in Cloudflare.

@@ -24,11 +24,10 @@ async function columnExists(env,table,column){
 }
 async function ensureTables(env){
  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS guest_receipts(token TEXT PRIMARY KEY,order_no TEXT NOT NULL,receipt_json TEXT NOT NULL,created_at TEXT NOT NULL)`).run();
- await env.DB.prepare(`CREATE TABLE IF NOT EXISTS site_config(id INTEGER PRIMARY KEY CHECK(id=1),config_json TEXT NOT NULL,updated_at TEXT NOT NULL)`).run();
- // Older D1 schemas may not have updated_at. Add it only when missing.
- if(await columnExists(env,'admins','updated_at')){} else { try{await env.DB.prepare(`ALTER TABLE admins ADD COLUMN updated_at TEXT`).run()}catch{} }
- if(await columnExists(env,'site_config','updated_at')){} else { try{await env.DB.prepare(`ALTER TABLE site_config ADD COLUMN updated_at TEXT`).run()}catch{} }
+ // Keep this table schema compatible with older D1 databases. Never require updated_at.
+ await env.DB.prepare(`CREATE TABLE IF NOT EXISTS site_config(id INTEGER PRIMARY KEY CHECK(id=1),config_json TEXT NOT NULL)`).run();
 }
+
 async function requireAdmin(req,env){const token=getCookie(req,'admin_session');if(!token)throw new Error('UNAUTHORIZED');const th=b64(await sha256(token));const row=await env.DB.prepare('SELECT a.* FROM admins a JOIN admin_sessions s ON s.admin_id=a.id WHERE s.token_hash=? AND s.expires_at>?').bind(th,now()).first();if(!row)throw new Error('UNAUTHORIZED');return row}
 async function ensureAdmin(env,password){let row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(ADMIN_USERNAME).first();const initial=env.ADMIN_INITIAL_PASSWORD;if(!row){if(!initial||!validPassword(initial))throw new Error('ADMIN_INITIAL_PASSWORD secret is not configured.');const ph=await passwordHash(initial);await env.DB.prepare('INSERT INTO admins(username,password_hash,password_salt,created_at) VALUES(?,?,?,?)').bind(ADMIN_USERNAME,ph.hash,ph.salt,now()).run();row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(ADMIN_USERNAME).first();}
  if(!(await verifyPassword(password,row.password_salt,row.password_hash))){
@@ -55,7 +54,7 @@ async function api(req,env){const path=new URL(req.url).pathname;
  if(req.method==='GET'&&path==='/api/admin/orders'){try{await requireAdmin(req,env);const rows=await env.DB.prepare(`SELECT o.order_no,o.items_json,o.subtotal,o.delivery,o.total,o.status,o.created_at,c.name,c.phone,c.address,c.pin FROM orders o LEFT JOIN customers c ON c.id=o.customer_id ORDER BY o.created_at DESC LIMIT 200`).all();return json({orders:rows.results||[]})}catch{return json({error:'Please login.'},401)}}
  if(req.method==='PUT'&&path.startsWith('/api/admin/orders/')){try{await requireAdmin(req,env);const orderNo=decodeURIComponent(path.split('/').pop()),b=await body(req);await env.DB.prepare('UPDATE orders SET status=? WHERE order_no=?').bind(String(b.status||'Order Received'),orderNo).run();return json({ok:true})}catch{return json({error:'Please login.'},401)}}
  if(req.method==='GET'&&path==='/api/admin/site-config'){try{await requireAdmin(req,env);const r=await env.DB.prepare('SELECT config_json FROM site_config WHERE id=1').first();return json({config:r?safeJson(r.config_json):null})}catch{return json({error:'Please login.'},401)}}
- if(req.method==='PUT'&&path==='/api/admin/site-config'){try{await requireAdmin(req,env);const b=await body(req),cfg=b.config||{};await env.DB.prepare('INSERT INTO site_config(id,config_json,updated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET config_json=excluded.config_json,updated_at=excluded.updated_at').bind(JSON.stringify(cfg),now()).run();return json({ok:true})}catch(e){return json({error:e.message||'Could not save settings.'},500)}}
+ if(req.method==='PUT'&&path==='/api/admin/site-config'){try{await requireAdmin(req,env);const b=await body(req),cfg=b.config||{};await env.DB.prepare('INSERT INTO site_config(id,config_json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET config_json=excluded.config_json').bind(JSON.stringify(cfg)).run();return json({ok:true})}catch(e){return json({error:e.message||'Could not save settings.'},500)}}
  if(req.method==='GET'&&path==='/api/site-config'){const r=await env.DB.prepare('SELECT config_json FROM site_config WHERE id=1').first();return json({config:r?safeJson(r.config_json):null})}
  if(req.method==='POST'&&path==='/api/guest-order'){
   const b=await body(req),name=String(b.name||'').trim(),phone=cleanPhone(b.phone),address=String(b.address||'').trim(),pin=String(b.pin||'').trim(),items=Array.isArray(b.items)?b.items:[];
