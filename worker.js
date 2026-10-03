@@ -42,11 +42,26 @@ const SCHEMA=[
 `CREATE INDEX IF NOT EXISTS idx_guest_orders_phone ON guest_orders(phone)`
 ];
 let schemaReady=false;
-async function ensureSchema(env){if(schemaReady)return; for(const q of SCHEMA) await env.DB.prepare(q).run(); schemaReady=true;}
+async function ensureSchema(env){
+ if(schemaReady)return;
+ for(const q of SCHEMA) await env.DB.prepare(q).run();
+ // Backward-compatible migrations for older D1 databases.
+ try{
+   const adminCols=await env.DB.prepare('PRAGMA table_info(admins)').all();
+   if(!(adminCols.results||[]).some(c=>c.name==='updated_at')) await env.DB.prepare("ALTER TABLE admins ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''").run();
+ }catch(e){ console.error('ADMIN_SCHEMA_MIGRATION',e); }
+ try{
+   const orderCols=await env.DB.prepare('PRAGMA table_info(guest_orders)').all();
+   const names=new Set((orderCols.results||[]).map(c=>c.name));
+   if(!names.has('payment_txn')) await env.DB.prepare("ALTER TABLE guest_orders ADD COLUMN payment_txn TEXT DEFAULT ''").run();
+   if(!names.has('payment_screenshot')) await env.DB.prepare("ALTER TABLE guest_orders ADD COLUMN payment_screenshot TEXT DEFAULT ''").run();
+ }catch(e){ console.error('GUEST_ORDER_SCHEMA_MIGRATION',e); }
+ schemaReady=true;
+}
 
 async function api(req,env){
  const url=new URL(req.url), path=url.pathname;
- if(req.method==='POST'&&path==='/api/admin/login'){ if(rateLimit(req))return json({error:'Too many attempts. Please try again later.'},429); const b=await body(req), username=String(b.username||''), password=String(b.password||''); if(username!==ADMIN_USERNAME||!validPassword(password))return json({error:'Invalid owner credentials.'},401); try{ const admin=await ensureAdmin(env); const row=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(admin.id).first(); if(!row||!(await verifyPassword(password,row.password_salt,row.password_hash)))return json({error:'Invalid owner credentials.'},401); const token=randomToken(), th=b64(await sha256(token)), exp=new Date(Date.now()+12*60*60*1000).toISOString(); await env.DB.prepare('INSERT INTO admin_sessions(token_hash,admin_id,expires_at,created_at) VALUES(?,?,?,?)').bind(th,row.id,exp,now()).run(); return json({ok:true,username:row.username},200,{'Set-Cookie':adminCookie(token)}); }catch(e){return json({error:e.message||'Owner login failed.'},500);} }
+ if(req.method==='POST'&&path==='/api/admin/login'){ if(rateLimit(req))return json({error:'Too many attempts. Please try again later.'},429); const b=await body(req), username=String(b.username||''), password=String(b.password||''); if(username!==ADMIN_USERNAME||!validPassword(password))return json({error:'Invalid owner credentials.'},401); try{ const admin=await ensureAdmin(env); const row=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(admin.id).first(); if(!row)return json({error:'Invalid owner credentials.'},401); let ownerPassOk=await verifyPassword(password,row.password_salt,row.password_hash); if(!ownerPassOk && env.ADMIN_INITIAL_PASSWORD && password===String(env.ADMIN_INITIAL_PASSWORD)){ const ph=await passwordHash(password); await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=?,updated_at=? WHERE id=?').bind(ph.hash,ph.salt,now(),row.id).run(); ownerPassOk=true; } if(!ownerPassOk)return json({error:'Invalid owner credentials.'},401); const token=randomToken(), th=b64(await sha256(token)), exp=new Date(Date.now()+12*60*60*1000).toISOString(); await env.DB.prepare('INSERT INTO admin_sessions(token_hash,admin_id,expires_at,created_at) VALUES(?,?,?,?)').bind(th,row.id,exp,now()).run(); return json({ok:true,username:row.username},200,{'Set-Cookie':adminCookie(token)}); }catch(e){return json({error:e.message||'Owner login failed.'},500);} }
  if(req.method==='GET'&&path==='/api/admin/me'){try{const a=await requireAdmin(req,env); return json({ok:true,username:a.username});}catch(e){return json({error:'Not logged in.'},401)}}
  if(req.method==='POST'&&path==='/api/admin/logout'){const token=getCookie(req,'admin_session'); if(token){await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash=?').bind(b64(await sha256(token))).run();} return json({ok:true},200,{'Set-Cookie':clearAdminCookie()});}
  if(req.method==='PUT'&&path==='/api/admin/password'){try{const a=await requireAdmin(req,env); const b=await body(req), current=String(b.currentPassword||''), next=String(b.newPassword||''); if(!validPassword(next))return json({error:'New password must be at least 8 characters.'},400); if(!(await verifyPassword(current,a.password_salt,a.password_hash)))return json({error:'Current password is incorrect.'},400); const ph=await passwordHash(next); await env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=?,updated_at=? WHERE id=?').bind(ph.hash,ph.salt,now(),a.id).run(); return json({ok:true});}catch(e){return json({error:'Please login.'},401)}}

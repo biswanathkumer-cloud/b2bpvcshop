@@ -1,0 +1,12 @@
+B2B PVC SHOP FINAL V10 CHECK REPORT
+
+- 14 original products verified: 14/14.
+- Customer catalog is now self-contained in the final guest flow; it no longer depends on the old window.products variable.
+- Add to Cart opens the single V10 cart after adding.
+- Buy Now uses the same cart/checkout flow.
+- Guest verification is session-based and runs once before purchase.
+- Payment accepts UTR or screenshot.
+- Receipt includes Print / Save as PDF.
+- Owner login uses /api/admin/login.
+- Worker includes backward-compatible admins.updated_at migration.
+- MutationObserver is debounced to reduce repeated rendering/buffering.
