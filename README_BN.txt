@@ -1,11 +1,8 @@
-B2B PVC PRINTING SHOP — CLEAN FINAL BUILD
+B2B PVC PRINTING SHOP - FINAL V12
 
-Customer: 14 products, one cart, one-time Name/Mobile/CAPTCHA verification, address/PIN, QR/UPI payment, UTR or screenshot, permanent D1 order, product-based Order ID, instant receipt, Print/Save PDF, guest logout.
+Customer: guest verification once, one cart, address/PIN, payment UTR or screenshot, permanent D1 order, instant receipt.
+Owner: password-only login, D1 purchases, quantity pricing, discount, SALE, delivery, QR/UPI, offer poster/notification.
 
-Owner: username is owner. Password is the Cloudflare Worker secret ADMIN_INITIAL_PASSWORD. Do NOT put the password in HTML/GitHub. Owner orders/settings are stored in the same D1 database.
+Cloudflare secret: ADMIN_INITIAL_PASSWORD (minimum 8 characters). Do not put the password in index.html.
 
 Deploy: npx wrangler deploy
-Required bindings: ASSETS + D1 DB (b2bpvcshop-db)
-Required secret: ADMIN_INITIAL_PASSWORD (minimum 8 characters)
-
-The Worker intentionally does NOT query legacy customers/orders/customer_id tables. This prevents the old `no such column: customer_id` error.
