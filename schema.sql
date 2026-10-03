@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS products(
  description TEXT DEFAULT '',
  image_url TEXT DEFAULT '',
  image_asset_key TEXT DEFAULT '',
+ image_asset_keys TEXT DEFAULT '[]',
  quantity_offers TEXT DEFAULT '[]',
  active INTEGER NOT NULL DEFAULT 1,
  created_at TEXT NOT NULL,
