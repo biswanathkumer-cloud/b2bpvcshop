@@ -2175,7 +2175,6 @@
         isOwnerLoggedIn=res.ok;
       } catch(_) { isOwnerLoggedIn=false; }
       updateAuthUI();
-    checkOwnerSession();
     }
 
     function updateAuthUI() {
@@ -2184,6 +2183,8 @@
       if(isOwnerLoggedIn){if(ownerBar)ownerBar.style.display="block";if(ownerBtn)ownerBtn.style.display="none";adminActions.forEach(el=>el.style.display="flex");renderProductGrid(products);}
       else{if(ownerBar)ownerBar.style.display="none";if(ownerBtn)ownerBtn.style.display="inline-flex";adminActions.forEach(el=>el.style.display="none");renderProductGrid(products);}
     }
+
+    checkOwnerSession();
 
     function togglePasswordVisibility(inputId, btn) {
       const input=document.getElementById(inputId); if(!input)return; const show=input.type==="password"; input.type=show?"text":"password"; if(btn)btn.textContent=show?"🙈":"👁️";
@@ -3178,205 +3179,316 @@
     // START FRESH
     initApp();
   </script>
-<script>
-/* ===== CLEAN OWNER / CUSTOMER SEPARATION ===== */
-(function(){
-  const CART_KEY='b2b_guest_cart_v4', GUEST_KEY='b2b_guest_verified_v4';
-  let cart=[];
-  let pendingAction=null;
-  let cartCheckout=false;
-  try { cart=JSON.parse(sessionStorage.getItem(CART_KEY)||'[]'); if(!Array.isArray(cart)) cart=[]; } catch(e){cart=[]}
 
-  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
-  function saveCart(){sessionStorage.setItem(CART_KEY,JSON.stringify(cart)); updateCartBadge();}
-  function guest(){try{return JSON.parse(sessionStorage.getItem(GUEST_KEY)||'null')}catch(e){return null}}
-  function saveGuest(name,mobile){sessionStorage.setItem(GUEST_KEY,JSON.stringify({name,mobile,at:Date.now()}));}
-  function verified(){const g=guest(); return !!(g&&g.name&&g.mobile&&Date.now()-Number(g.at||0)<2*60*60*1000)}
-  function cleanOld(){
-    ['wb_pvc_cart_v2','wb_pvc_customer_accounts_v2','wb_pvc_customer_session_v2','customer_logged_in_phone','customer_logged_in_name','customer_logged_in_tracking','secure_customer_session','customerToken'].forEach(k=>localStorage.removeItem(k));
-    ['customerAuthNavBtn'].forEach(id=>{const e=document.getElementById(id);if(e)e.remove();});
-    ['customerAuthModal','customerAuthV2','secureCustomerModal','customerDashboardModal','customerDashV2'].forEach(id=>{const e=document.getElementById(id);if(e)e.remove();});
-  }
-  function ensureNav(){
-    const nav=document.querySelector('.nav-actions'); if(!nav)return;
-    document.querySelectorAll('#cartNavBtn').forEach((e,i)=>{if(i)e.remove();});
-    let cb=document.getElementById('cartNavBtn');
-    if(!cb){cb=document.createElement('button');cb.id='cartNavBtn';cb.className='btn btn-primary';cb.type='button';cb.innerHTML='🛒 Cart (<span id="cartBadge">0</span>)';cb.onclick=window.openGuestCart;nav.insertBefore(cb,nav.firstChild);}
-    let owner=document.getElementById('ownerPortalAccessBtn');
-    if(owner){owner.textContent='🔐 Owner Login';owner.style.display=isOwnerLoggedIn?'none':'inline-flex';owner.onclick=window.triggerOwnerAccess;}
-    let id=document.getElementById('guestIdentityBar');
-    const g=guest();
-    if(g){
-      if(!id){id=document.createElement('span');id.id='guestIdentityBar';id.style.cssText='display:inline-flex;align-items:center;padding:8px 11px;border-radius:9px;background:#eff6ff;color:#1e3a8a;font-weight:700;font-size:12px';nav.insertBefore(id,nav.firstChild);}
-      id.textContent='👤 '+g.name+' • '+g.mobile;
-    } else if(id) id.remove();
+
+
+<script>
+/* ================= PVC SHOP UPGRADE =================
+   Multi-product cart + quantity offers + customer accounts
+   Customer accounts in this static version are stored in this browser.
+   For true cross-device/cloud accounts, connect a backend (e.g. Supabase/Firebase).
+===================================================== */
+(function(){
+  const CART_KEY='wb_pvc_cart_v2';
+  const CUSTOMER_KEY='wb_pvc_customer_accounts_v2';
+  const SESSION_KEY='wb_pvc_customer_session_v2';
+  let shopCart = JSON.parse(localStorage.getItem(CART_KEY)||'[]');
+  let activeCartCheckout = false;
+
+  function saveCart(){localStorage.setItem(CART_KEY,JSON.stringify(shopCart));updateCartBadge();}
+  function currentCustomer(){try{return JSON.parse(localStorage.getItem(SESSION_KEY)||'null')}catch(e){return null}}
+  function accounts(){try{return JSON.parse(localStorage.getItem(CUSTOMER_KEY)||'{}')}catch(e){return {}}}
+  function saveAccounts(a){localStorage.setItem(CUSTOMER_KEY,JSON.stringify(a))}
+  function normPhone(v){return String(v||'').replace(/\D/g,'').slice(-10)}
+  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+
+  function ensureCartUI(){
+    const nav=document.querySelector('.nav-actions');
+    const cb=document.getElementById('customerAuthNavBtn'); if(cb) cb.style.setProperty('display','inline-flex','important');
+    if(nav && !document.getElementById('cartNavBtn')){
+      const b=document.createElement('button'); b.id='cartNavBtn'; b.className='btn btn-primary'; b.innerHTML='🛒 Cart (<span id="cartBadge">0</span>)'; b.onclick=openCart;
+      nav.insertBefore(b,nav.firstChild);
+    }
     updateCartBadge();
   }
-  function updateCartBadge(){const b=document.getElementById('cartBadge');if(b)b.textContent=cart.reduce((n,x)=>n+Number(x.qty||0),0);}
+  function updateCartBadge(){const b=document.getElementById('cartBadge'); if(b)b.textContent=shopCart.reduce((n,x)=>n+(x.qty||0),0)}
 
-  function ensureVerifyModal(){
-    if(document.getElementById('guestVerifyModal'))return;
-    const d=document.createElement('div');d.className='modal-overlay';d.id='guestVerifyModal';
-    d.innerHTML='<div class="modal-card" style="max-width:480px"><div class="modal-header"><h3>👤 Customer Verification</h3><button class="close-btn" onclick="closeModal(\'guestVerifyModal\')">×</button></div><p style="color:#475569;margin-top:0">Purchase করার আগে শুধু Name, Mobile ও CAPTCHA verify করুন। কোনো Customer account/password লাগবে না।</p><div class="form-group"><label>Customer Name *</label><input id="guestNameInput" autocomplete="name"></div><div class="form-group"><label>Mobile Number *</label><input id="guestMobileInput" inputmode="numeric" maxlength="10" autocomplete="tel"></div><div style="display:flex;gap:10px;align-items:center"><div style="font-size:22px;font-weight:900;letter-spacing:5px;background:#f1f5f9;padding:9px 13px;border-radius:9px" id="guestCaptchaText"></div><button class="btn btn-light" type="button" onclick="refreshGuestCaptcha()">↻</button></div><div class="form-group" style="margin-top:10px"><label>CAPTCHA *</label><input id="guestCaptchaInput" autocomplete="off"></div><button class="btn btn-primary" style="width:100%" onclick="verifyGuestCustomer()">✅ Verify &amp; Continue</button></div>';
-    document.body.appendChild(d); refreshGuestCaptcha();
+  function tiersFor(card){
+    const base=Number(card.price||0), mrp=Number(card.normalPrice||base);
+    const t=Array.isArray(card.bulkTiers)&&card.bulkTiers.length?card.bulkTiers:[{min:1,price:base},{min:5,price:base},{min:10,price:base},{min:25,price:base}];
+    return t.map(x=>({min:Number(x.min)||1,price:Number(x.price)||base})).sort((a,b)=>a.min-b.min);
   }
-  let captcha='';
-  window.refreshGuestCaptcha=function(){captcha=String(Math.floor(1000+Math.random()*9000));const e=document.getElementById('guestCaptchaText');if(e)e.textContent=captcha;const i=document.getElementById('guestCaptchaInput');if(i)i.value='';};
-  function requestVerify(action){
-    if(verified()){action();return;}
-    pendingAction=action;ensureVerifyModal();const g=guest();document.getElementById('guestNameInput').value=g?.name||'';document.getElementById('guestMobileInput').value=g?.mobile||'';document.getElementById('guestCaptchaInput').value='';refreshGuestCaptcha();openModal('guestVerifyModal');
-  }
-  window.verifyGuestCustomer=function(){
-    const name=document.getElementById('guestNameInput').value.trim(), mobile=document.getElementById('guestMobileInput').value.replace(/\D/g,'').slice(-10), cap=document.getElementById('guestCaptchaInput').value.trim();
-    if(name.length<2)return alert('Valid customer name দিন।'); if(mobile.length!==10)return alert('10-digit mobile number দিন।'); if(cap!==captcha)return alert('CAPTCHA ভুল হয়েছে।');
-    saveGuest(name,mobile);closeModal('guestVerifyModal');ensureNav();const a=pendingAction;pendingAction=null;if(a)a();
+  function unitPrice(card,qty){let p=Number(card.price||0); for(const t of tiersFor(card)){if(qty>=t.min)p=t.price} return p}
+  function priceLabel(card,qty){const p=unitPrice(card,qty); const first=tiersFor(card)[0]; return {price:p,mrp:Number(card.normalPrice||p),save:Math.max(0,(Number(card.normalPrice||p)-p)*qty),discount:(Number(card.normalPrice||p)>p?Math.round((1-p/Number(card.normalPrice||p))*100):0)} }
+
+  window.addToCartV2=function(cardId){
+    const card=products.find(c=>c.id===cardId); if(!card)return;
+    const q=Math.max(1,Number(cardQtyMap[cardId]||1));
+    const old=shopCart.find(x=>x.id===cardId); if(old)old.qty+=q; else shopCart.push({id:cardId,qty:q});
+    saveCart(); renderCart(); alert('✅ Product Cart-এ যোগ হয়েছে। আপনি আরও অন্য Product যোগ করতে পারবেন।');
   };
+  window.changeCartQty=function(id,d){const x=shopCart.find(i=>i.id===id); if(!x)return; x.qty=Math.max(1,x.qty+d); saveCart(); renderCart();}
+  window.removeCartItem=function(id){shopCart=shopCart.filter(x=>x.id!==id);saveCart();renderCart();}
 
-  function tiers(c){const t=Array.isArray(c.bulkTiers)&&c.bulkTiers.length?c.bulkTiers:[{min:1,price:Number(c.price||0)},{min:5,price:Number(c.price||0)},{min:10,price:Number(c.price||0)},{min:25,price:Number(c.price||0)}];return t.slice().sort((a,b)=>Number(a.min)-Number(b.min));}
-  function unit(c,q){let p=Number(c.price||0);tiers(c).forEach(t=>{if(q>=Number(t.min))p=Number(t.price)});return p;}
-  function renderClean(list){
+  function cartTotals(){
+    let subtotal=0,mrp=0;
+    shopCart.forEach(x=>{const c=products.find(p=>p.id===x.id);if(!c)return;subtotal+=unitPrice(c,x.qty)*x.qty;mrp+=Number(c.normalPrice||unitPrice(c,x.qty))*x.qty});
+    const delivery=Number(masterSettings.deliveryFee)||0; return {subtotal,mrp,delivery,total:subtotal+delivery,save:Math.max(0,mrp-subtotal)};
+  }
+  window.openCart=function(){
+    let m=document.getElementById('v2CartModal'); if(!m){m=document.createElement('div');m.className='modal-overlay';m.id='v2CartModal';m.innerHTML=`<div class="modal-card" style="max-width:850px"><div class="modal-header"><h3>🛒 Shopping Cart</h3><button class="close-btn" onclick="closeV2Cart()">×</button></div><div id="v2CartBody"></div></div>`;document.body.appendChild(m)}
+    renderCart();m.style.display='flex';
+  };
+  window.closeV2Cart=function(){const m=document.getElementById('v2CartModal');if(m)m.style.display='none'};
+  function renderCart(){
+    const box=document.getElementById('v2CartBody'); if(!box)return;
+    if(!shopCart.length){box.innerHTML='<div style="padding:30px;text-align:center;color:#64748b">🛒 Cart is empty.<br><button class="btn btn-primary" style="margin-top:12px" onclick="closeV2Cart();scrollToProducts()">Browse Products</button></div>';return}
+    let html=''; shopCart.forEach(x=>{const c=products.find(p=>p.id===x.id);if(!c)return;const u=unitPrice(c,x.qty);html+=`<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;border-bottom:1px solid #e2e8f0;padding:12px 0"><div style="flex:1"><b>${esc(c.title)}</b><div style="font-size:12px;color:#64748b">₹${u} × ${x.qty} = ₹${u*x.qty}</div></div><div style="display:flex;gap:5px;align-items:center"><button class="btn btn-light" onclick="changeCartQty('${c.id}',-1)">−</button><b>${x.qty}</b><button class="btn btn-light" onclick="changeCartQty('${c.id}',1)">+</button><button class="btn btn-danger" onclick="removeCartItem('${c.id}')">Remove</button></div></div>`});
+    const t=cartTotals(); html+=`<div style="text-align:right;padding-top:15px"><div>Subtotal: ₹${t.subtotal}</div><div>Delivery: ₹${t.delivery}</div><div style="font-size:20px;font-weight:800;margin-top:5px">Total: ₹${t.total}</div><button class="btn btn-primary" style="margin-top:12px;padding:12px 22px" onclick="startCartCheckout()">Proceed to Purchase</button></div>`;box.innerHTML=html;
+  }
+  window.startCartCheckout=function(){if(!shopCart.length)return; if(!currentCustomer()){ensureCustomerModal();showCustTab('login');openModal('customerAuthV2');alert('Customer login করুন, তারপর Cart থেকে Purchase করুন।');return;} closeV2Cart();activeCartCheckout=true;activeOrderCard=null;const t=cartTotals();document.getElementById('mTitle').innerText=shopCart.map(x=>{const c=products.find(p=>p.id===x.id);return c?c.title+' × '+x.qty:''}).filter(Boolean).join(', ');document.getElementById('mQty').innerText=shopCart.reduce((n,x)=>n+x.qty,0)+' Piece(s)';document.getElementById('mNormalMRP').innerText='Rs. '+t.mrp;document.getElementById('mDiscountSaved').innerText='-Rs. '+t.save;document.getElementById('mDeliveryAmt').innerText=t.delivery?'Rs. '+t.delivery:'Free (Rs. 0)';document.getElementById('mTotal').innerText='Rs. '+t.total;const c=currentCustomer();if(c){document.getElementById('custName').value=c.name||'';document.getElementById('custPhone').value=c.phone||'';document.getElementById('custAddress').value=c.address||'';document.getElementById('custPin').value=c.pin||''}const upiUrl=`upi://pay?pa=${encodeURIComponent(masterSettings.upiId)}&pn=${encodeURIComponent(masterSettings.name)}&am=${t.total}&cu=INR&tn=PVC%20CARD%20ORDER`;document.getElementById('upiQrImg').src=`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiUrl)}`;openModal('checkoutModal')}
+
+  // Replace product rendering so customer can add ANY number of products to one cart.
+  window.renderProductGrid=function(list){
     const grid=document.getElementById('productGrid');if(!grid)return;grid.innerHTML='';
-    (list||[]).forEach((c,index)=>{
-      if(!cardQtyMap[c.id])cardQtyMap[c.id]=1;const q=cardQtyMap[c.id], price=unit(c,q), mrp=Number(c.normalPrice||c.price||0), img=(c.images&&c.images[0])||((typeof RealCardSvgs!=='undefined')?RealCardSvgs.swasthya:'');
-      const item=document.createElement('div');item.className='product-card';item.id='card-wrapper-'+c.id;item.setAttribute('draggable',isOwnerLoggedIn?'true':'false');item.innerHTML=`${isOwnerLoggedIn?'<div class="drag-handle">⋮⋮ Reorder</div>':''}<div class="card-photo-box"><div class="card-photo-frame"><img src="${img}" alt="${esc(c.title)}"></div>${c.tag?`<span class="card-category-pill">${esc(c.tag)}</span>`:''}</div><div class="card-body"><h4>${esc(c.title)}</h4><p>${esc(c.desc||'Premium quality PVC card')}</p><div class="rate-qty-row"><div class="price-display-block"><div class="price-compare"><span class="final-price">Rs. ${price*q}</span><span class="mrp-crossed">MRP: Rs. ${mrp*q}</span></div><span class="offer-save-tag">Save: Rs. ${Math.max(0,(mrp-price)*q)}</span></div><div class="qty-counter"><button type="button" onclick="modifyCardQty('${c.id}',-1,${price},${mrp})">−</button><span id="qty-val-${c.id}">${q}</span><button type="button" onclick="modifyCardQty('${c.id}',1,${price},${mrp})">+</button></div></div><div class="card-footer-btns">${isOwnerLoggedIn?`<div class="admin-card-actions" style="display:flex"><button class="btn btn-card-action" onclick="openEditProductModal('${c.id}')">✏️</button><button class="btn btn-card-action btn-danger" onclick="deleteCardProduct('${c.id}')">🗑️</button></div>`:`<button class="btn btn-checkout" onclick="guestAdd('${c.id}')">🛒 Add to Cart</button><button class="btn btn-primary" onclick="guestBuy('${c.id}')">⚡ Buy Now</button>`}</div></div>`;
-      grid.appendChild(item);
-    });
-  }
-  window.guestAdd=function(id){requestVerify(()=>{const q=Math.max(1,Number(cardQtyMap[id]||1)),x=cart.find(i=>i.id===id);if(x)x.qty+=q;else cart.push({id,qty:q});saveCart();alert('✅ Product Cart-এ যোগ হয়েছে।');});};
-  window.guestBuy=function(id){requestVerify(()=>{const q=Math.max(1,Number(cardQtyMap[id]||1));cart=[{id,qty:q}];saveCart();if(typeof window.openGuestCart==='function')window.openGuestCart();});};
-  window.openGuestCart=function(){
-    let m=document.getElementById('guestCartModal');if(!m){m=document.createElement('div');m.className='modal-overlay';m.id='guestCartModal';m.innerHTML='<div class="modal-card" style="max-width:850px"><div class="modal-header"><h3>🛒 Customer Cart</h3><button class="close-btn" onclick="closeModal(\'guestCartModal\')">×</button></div><div id="guestCartBody"></div></div>';document.body.appendChild(m)}
-    const b=document.getElementById('guestCartBody');if(!cart.length){b.innerHTML='<div style="padding:30px;text-align:center">🛒 Cart is empty.</div>';openModal('guestCartModal');return;}
-    let html='';cart=cart.filter(x=>products.some(p=>p.id===x.id));cart.forEach(x=>{const c=products.find(p=>p.id===x.id),u=unit(c,x.qty);html+=`<div style="display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid #e2e8f0"><div><b>${esc(c.title)}</b><br><small>₹${u} × ${x.qty} = ₹${u*x.qty}</small></div><div><button class="btn btn-light" onclick="changeGuestQty('${c.id}',-1)">−</button> ${x.qty} <button class="btn btn-light" onclick="changeGuestQty('${c.id}',1)">+</button> <button class="btn btn-danger" onclick="removeGuestItem('${c.id}')">Remove</button></div></div>`});
-    const total=cart.reduce((s,x)=>{const c=products.find(p=>p.id===x.id);return s+unit(c,x.qty)*x.qty},0);html+=`<div style="text-align:right;padding-top:15px"><b style="font-size:20px">Total: ₹${total}</b><br><button class="btn btn-primary" style="margin-top:12px" onclick="guestCheckout()">Proceed to Purchase</button></div>`;b.innerHTML=html;saveCart();openModal('guestCartModal');
+    list.forEach((card,index)=>{if(!cardQtyMap[card.id])cardQtyMap[card.id]=1;const qty=cardQtyMap[card.id];const pp=priceLabel(card,qty);const imgs=card.images&&card.images.length?card.images:[RealCardSvgs.swasthya];const badge=pp.discount?pp.discount+'% OFF':(card.offerBadge||'');
+      const item=document.createElement('div');item.className='product-card';item.id='card-wrapper-'+card.id;item.innerHTML=`${isOwnerLoggedIn?'<div class="drag-handle">⋮⋮ Reorder</div>':''}${badge?`<span class="offer-discount-badge">🔥 ${badge}</span>`:''}<div class="card-photo-box"><div class="card-photo-frame"><img src="${imgs[0]}" alt="${esc(card.title)}"></div><span class="card-category-pill">${esc(card.tag||'PVC Smart Card')}</span></div><div class="card-body"><h4>${esc(card.title)}</h4><p>${esc(card.desc||'Premium quality PVC card')}</p><div class="rate-qty-row"><div class="price-display-block"><div class="price-compare"><span class="final-price">Rs. ${pp.price*qty}</span><span class="mrp-crossed">MRP: Rs. ${pp.mrp*qty}</span></div><span class="offer-save-tag">Save: Rs. ${pp.save}</span></div><div class="qty-counter"><button type="button" onclick="modifyCardQtyV2('${card.id}',-1)">−</button><span id="qty-val-${card.id}">${qty}</span><button type="button" onclick="modifyCardQtyV2('${card.id}',1)">+</button></div></div><div style="font-size:11px;color:#0369a1;background:#eff6ff;padding:7px;border-radius:7px;margin:8px 0">Bulk offer: ${tiersFor(card).map(t=>t.min+'+ ₹'+t.price).join(' • ')}</div><div class="card-footer-btns"><button class="btn btn-checkout" onclick="addToCartV2('${card.id}')">🛒 Add to Cart</button><button class="btn btn-light" onclick="buyOneV2('${card.id}')">Buy Now</button>${isOwnerLoggedIn?`<div class="admin-card-actions"><button class="btn btn-card-action" onclick="openEditProductModal('${card.id}')">✏️</button><button class="btn btn-card-action btn-danger" onclick="deleteCardProduct('${card.id}')">🗑️</button></div>`:''}</div></div>`;grid.appendChild(item);
+    });updateCartBadge();
   };
-  window.changeGuestQty=function(id,d){const x=cart.find(i=>i.id===id);if(!x)return;x.qty=Math.max(1,x.qty+d);saveCart();openGuestCart();};
-  window.removeGuestItem=function(id){cart=cart.filter(x=>x.id!==id);saveCart();openGuestCart();};
-  window.guestCheckout=function(){if(!cart.length)return;requestVerify(()=>{closeModal('guestCartModal');cartCheckout=true;const first=cart[0],t=cart.reduce((s,x)=>{const c=products.find(p=>p.id===x.id);return s+unit(c,x.qty)*x.qty},0);const g=guest();if(typeof openModal==='function'&&document.getElementById('checkoutModal')){document.getElementById('mTitle').innerText=cart.map(x=>{const c=products.find(p=>p.id===x.id);return c.title+' × '+x.qty}).join(', ');document.getElementById('mQty').innerText=cart.reduce((n,x)=>n+x.qty,0)+' Piece(s)';document.getElementById('mNormalMRP').innerText='Rs. '+cart.reduce((s,x)=>{const c=products.find(p=>p.id===x.id);return s+Number(c.normalPrice||c.price||0)*x.qty},0);document.getElementById('mDiscountSaved').innerText='-Rs. '+(Number(document.getElementById('mNormalMRP').innerText.replace(/\D/g,''))||t)-t;document.getElementById('mDeliveryAmt').innerText='Free (Rs. 0)';document.getElementById('mTotal').innerText='Rs. '+t;document.getElementById('custName').value=g?.name||'';document.getElementById('custPhone').value=g?.mobile||'';openModal('checkoutModal');}else{alert('Checkout panel পাওয়া যাচ্ছে না।');}});};
+  window.modifyCardQtyV2=function(id,d){const c=products.find(x=>x.id===id);let q=(cardQtyMap[id]||1)+d;q=Math.max(1,Math.min(500,q));cardQtyMap[id]=q;renderProductGrid(products.filter(p=>{const s=(document.getElementById('searchInput')?.value||'').toLowerCase();return !s||p.title.toLowerCase().includes(s)||(p.tag||'').toLowerCase().includes(s)}));}
+  window.buyOneV2=function(id){const old=shopCart;shopCart=[];const q=cardQtyMap[id]||1;shopCart.push({id,qty:q});saveCart();startCartCheckout();}
 
-  // Customer checkout override: keep the existing checkout form, but never require a customer account.
-  const oldPlace=window.handlePlaceOrder;
-  window.handlePlaceOrder=function(e){if(!cartCheckout)return oldPlace(e);e.preventDefault();const name=document.getElementById('custName').value.trim(),phone=document.getElementById('custPhone').value.replace(/\D/g,'').slice(-10),address=document.getElementById('custAddress').value.trim(),pin=document.getElementById('custPin').value.trim(),txn=document.getElementById('custTxn').value.trim();if(name.length<2||phone.length!==10||!address||!pin||!txn)return alert('Name, mobile, full address, PIN and transaction ID required.');const items=cart.map(x=>{const c=products.find(p=>p.id===x.id),u=unit(c,x.qty);return{id:x.id,title:c.title,quantity:x.qty,unitPrice:u,total:u*x.qty}});const subtotal=items.reduce((s,i)=>s+i.total,0),tracking='WB-PVC-'+Math.floor(100000+Math.random()*900000);const o={trackingId:tracking,date:new Date().toLocaleString('en-IN'),customerName:name,phone,address,pin,items,cardTitle:items.map(i=>i.title).join(', '),quantity:items.reduce((s,i)=>s+i.quantity,0),total:subtotal,status:'Order Received',txn,paymentMode:'Online UPI (Pre-Paid)'};orders.unshift(o);saveOrders();cart=[];saveCart();cartCheckout=false;closeModal('checkoutModal');const wa=(masterSettings.whatsapp||'').replace(/\D/g,'').slice(-10);const msg=encodeURIComponent(`NEW PVC CARD ORDER\nOrder: ${tracking}\nName: ${name}\nMobile: ${phone}\nAddress: ${address}, PIN ${pin}\nTotal: ₹${subtotal}\nTransaction: ${txn}`);const sl=document.getElementById('successTrackingId');if(sl)sl.innerText=tracking;const wl=document.getElementById('successWhatsappLink');if(wl)wl.href=`https://wa.me/91${wa}?text=${msg}`;if(document.getElementById('orderSuccessModal'))openModal('orderSuccessModal');};
+  // Quantity-wise offer editor for owner.
+  window.openBulkOfferManager=function(){if(!isOwnerLoggedIn){alert('Please login as Owner first.');return}let m=document.getElementById('bulkOfferModal');if(!m){m=document.createElement('div');m.className='modal-overlay';m.id='bulkOfferModal';m.innerHTML=`<div class="modal-card" style="max-width:1000px"><div class="modal-header"><h3>🏷️ Quantity-wise Offer Price</h3><button class="close-btn" onclick="closeModal('bulkOfferModal')">×</button></div><p style="font-size:12px;color:#64748b;margin-bottom:12px">Example: 1+ ₹150, 5+ ₹130, 10+ ₹110, 25+ ₹90. Customer cart automatically uses the applicable quantity rate.</p><div id="bulkOfferBody"></div><button class="btn btn-primary" style="margin-top:15px" onclick="saveBulkOffers()">💾 Save Offer Prices</button></div>`;document.body.appendChild(m)}
+    document.getElementById('bulkOfferBody').innerHTML=products.map((c,i)=>{const t=tiersFor(c);return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:10px"><b>${esc(c.title)}</b><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:8px">${[0,1,2,3].map(j=>`<div><small>Min Qty</small><input id="bm${i}q${j}" type="number" min="1" value="${t[j]?.min||[1,5,10,25][j]}" style="width:100%;padding:7px"><small>Price</small><input id="bm${i}p${j}" type="number" min="0" value="${t[j]?.price||c.price}" style="width:100%;padding:7px"></div>`).join('')}</div></div>`}).join('');openModal('bulkOfferModal')}
+  window.saveBulkOffers=function(){products.forEach((c,i)=>{c.bulkTiers=[0,1,2,3].map(j=>({min:Math.max(1,Number(document.getElementById(`bm${i}q${j}`).value)||1),price:Math.max(0,Number(document.getElementById(`bm${i}p${j}`).value)||0)})).sort((a,b)=>a.min-b.min)});saveProducts();renderProductGrid(products);closeModal('bulkOfferModal');alert('✅ Quantity-wise offer prices saved.');}
 
-  // Hard separation: customer purchase UI is hidden from owner; owner sees only management controls.
-  window.updateAuthUI=function(){const bar=document.getElementById('ownerMasterBar'),btn=document.getElementById('ownerPortalAccessBtn');document.body.classList.toggle('owner-session',!!isOwnerLoggedIn);if(bar)bar.style.display=isOwnerLoggedIn?'block':'none';if(btn)btn.style.display=isOwnerLoggedIn?'none':'inline-flex';renderClean(products||[]);ensureNav();};
-  const oldInit=window.initApp;
-  cleanOld();
-  // Make sure default products are restored if an earlier broken save left an empty product list.
-  try{if(!Array.isArray(products)||!products.length){products=officialWBCards.slice();saveProducts();}}catch(e){}
-  window.renderProductGrid=renderClean;
-  renderClean(products||[]);ensureNav();updateCartBadge();
-  setTimeout(()=>{cleanOld();if(!Array.isArray(products)||!products.length){products=officialWBCards.slice();saveProducts();}renderClean(products||[]);ensureNav();},400);
+  // Customer account system: name + mobile + password + delivery details.
+  function ensureCustomerModal(){if(document.getElementById('customerAuthV2'))return;const d=document.createElement('div');d.className='modal-overlay';d.id='customerAuthV2';d.innerHTML=`<div class="modal-card" style="max-width:520px"><div class="modal-header"><h3>👤 Customer Account</h3><button class="close-btn" onclick="closeModal('customerAuthV2')">×</button></div><div style="display:flex;gap:6px;margin-bottom:14px"><button id="custTabLogin" class="btn btn-primary" onclick="showCustTab('login')">Login</button><button id="custTabReg" class="btn btn-light" onclick="showCustTab('reg')">Create Account</button></div><div id="custLoginPane"><div class="form-group"><label>Mobile *</label><input id="v2LoginPhone" maxlength="10"></div><div class="form-group"><label>Password *</label><input id="v2LoginPass" type="password"></div><button class="btn btn-primary" style="width:100%" onclick="customerLoginV2()">Login</button></div><div id="custRegPane" style="display:none"><div class="form-group"><label>Full Name *</label><input id="v2RegName"></div><div class="form-group"><label>Mobile *</label><input id="v2RegPhone" maxlength="10"></div><div class="form-group"><label>Password *</label><input id="v2RegPass" type="password" minlength="6"></div><div class="form-group"><label>Address</label><textarea id="v2RegAddress"></textarea></div><div class="form-cols-2"><div class="form-group"><label>PIN</label><input id="v2RegPin"></div></div><button class="btn btn-primary" style="width:100%" onclick="customerRegisterV2()">Create Account</button></div></div>`;document.body.appendChild(d)}
+  window.showCustTab=function(t){document.getElementById('custLoginPane').style.display=t==='login'?'block':'none';document.getElementById('custRegPane').style.display=t==='reg'?'block':'none';document.getElementById('custTabLogin').className='btn '+(t==='login'?'btn-primary':'btn-light');document.getElementById('custTabReg').className='btn '+(t==='reg'?'btn-primary':'btn-light')}
+  window.customerRegisterV2=function(){const name=document.getElementById('v2RegName').value.trim(),phone=normPhone(document.getElementById('v2RegPhone').value),pass=document.getElementById('v2RegPass').value,address=document.getElementById('v2RegAddress').value.trim(),pin=document.getElementById('v2RegPin').value.trim();if(name.length<2||phone.length!==10||pass.length<6)return alert('Name, valid 10-digit mobile and 6+ character password required.');const a=accounts();if(a[phone])return alert('এই mobile দিয়ে account আগে থেকেই আছে। Login করুন।');a[phone]={name,phone,password:pass,address,pin,createdAt:new Date().toISOString()};saveAccounts(a);localStorage.setItem(SESSION_KEY,JSON.stringify(a[phone]));loggedInCustomerPhone=phone;loggedInCustomerName=name;closeModal('customerAuthV2');updateCustomerAuthUI();alert('✅ Customer account created.');}
+  window.customerLoginV2=function(){const phone=normPhone(document.getElementById('v2LoginPhone').value),pass=document.getElementById('v2LoginPass').value,a=accounts();if(!a[phone]||a[phone].password!==pass)return alert('Mobile/password incorrect.');localStorage.setItem(SESSION_KEY,JSON.stringify(a[phone]));loggedInCustomerPhone=phone;loggedInCustomerName=a[phone].name;loggedInCustomerTracking='';closeModal('customerAuthV2');updateCustomerAuthUI();alert('✅ Login successful.');}
+  window.customerLogoutV2=function(){localStorage.removeItem(SESSION_KEY);loggedInCustomerPhone='';loggedInCustomerName='';loggedInCustomerTracking='';updateCustomerAuthUI();alert('Logged out.');}
+
+  // Override customer auth button: account login/dashboard.
+  window.openCustomerAuthModal=function(){ensureCustomerModal();const c=currentCustomer();if(c){loggedInCustomerPhone=c.phone;loggedInCustomerName=c.name;openCustomerDashboardV2()}else{showCustTab('login');openModal('customerAuthV2')}}
+  window.openCustomerDashboardV2=function(){let c=currentCustomer();if(!c)return openCustomerAuthModal();let m=document.getElementById('customerDashV2');if(!m){m=document.createElement('div');m.className='modal-overlay';m.id='customerDashV2';m.innerHTML=`<div class="modal-card" style="max-width:900px"><div class="modal-header"><h3>👤 My Account</h3><button class="close-btn" onclick="closeModal('customerDashV2')">×</button></div><div id="customerDashBody"></div></div>`;document.body.appendChild(m)}const myOrders=orders.filter(o=>normPhone(o.phone)===normPhone(c.phone));const cartCount=shopCart.reduce((n,x)=>n+x.qty,0);document.getElementById('customerDashBody').innerHTML=`<div style="background:#f0fdf4;padding:14px;border-radius:10px;margin-bottom:14px"><b>${esc(c.name)}</b><br>📞 ${esc(c.phone)}<br>📍 ${esc(c.address||'Address not saved')} ${c.pin?'PIN '+esc(c.pin):''}</div><h4>🛒 Current Cart (${cartCount})</h4><button class="btn btn-primary" style="margin:8px 0 16px" onclick="closeModal('customerDashV2');openCart()">View Cart</button><h4>📦 My Orders</h4><div>${myOrders.length?myOrders.map(o=>`<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:8px 0"><b>${esc(o.trackingId)}</b> — ${esc(o.date)}<br>${esc(o.cardTitle||'Multiple Products')} — ${o.quantity||''} pcs<br><b>₹${o.total||0}</b> — ${esc(o.status||'Order Received')}</div>`).join(''):'No orders yet.'}</div><button class="btn btn-danger" style="margin-top:15px" onclick="customerLogoutV2();closeModal('customerDashV2')">Logout</button>`;openModal('customerDashV2')}
+
+  // Cart-aware checkout submission. It still uses the existing payment/UTR fields.
+  const originalHandlePlaceOrder=window.handlePlaceOrder;
+  window.handlePlaceOrder=function(e){
+    if(!activeCartCheckout){return originalHandlePlaceOrder(e)}
+    e.preventDefault();const name=document.getElementById('custName').value.trim(),phone=normPhone(document.getElementById('custPhone').value),pin=document.getElementById('custPin').value.trim(),address=document.getElementById('custAddress').value.trim(),txn=document.getElementById('custTxn').value.trim();if(!name||phone.length!==10||!address||!txn)return alert('Name, valid mobile, address and UPI UTR are required.');
+    const t=cartTotals(),trackingId='WB-PVC-'+Math.floor(100000+Math.random()*900000);const items=shopCart.map(x=>{const c=products.find(p=>p.id===x.id);return {id:x.id,title:c.title,quantity:x.qty,unitPrice:unitPrice(c,x.qty),total:unitPrice(c,x.qty)*x.qty}});const newOrder={trackingId,date:new Date().toLocaleString('en-IN'),customerName:name,phone,address,pin,cardTitle:items.map(i=>i.title).join(', '),quantity:items.reduce((n,i)=>n+i.quantity,0),items,docNumber:document.getElementById('custDocNumber').value.trim()||'To be collected',docFileName:tempCustomerDocName||'Will send on WhatsApp',docFileBase64:tempCustomerDocBase64,courierTrackingNo:'Processing Dispatch',courierName:'India Post SpeedPost',deliveryFee:t.delivery,total:t.total,paymentMode:'Online UPI (Pre-Paid)',txn,status:'Order Received',courierNo:'Dispatched within 5-7 Days'};orders.unshift(newOrder);saveOrders();shopCart=[];saveCart();activeCartCheckout=false;closeModal('checkoutModal');const cleanNum=masterSettings.whatsapp.replace(/\D/g,'').slice(-10);const lines=items.map(i=>`• ${i.title} — ${i.quantity} × ₹${i.unitPrice} = ₹${i.total}`).join('\n');const msg=encodeURIComponent(`📦 *NEW PVC CARD ORDER*\n🆔 ${trackingId}\n👤 ${name}\n📞 ${phone}\n📍 ${address}, PIN ${pin}\n${lines}\n💰 Subtotal ₹${t.subtotal}\n🚚 Delivery ₹${t.delivery}\n*Total ₹${t.total}*\n💳 UTR ${txn}`);document.getElementById('successTrackingId').innerText=trackingId;document.getElementById('successWhatsappLink').href=`https://wa.me/91${cleanNum}?text=${msg}`;openModal('orderSuccessModal');updateCartBadge();
+    const a=accounts();if(a[phone]){a[phone].name=name;a[phone].address=address;a[phone].pin=pin;saveAccounts(a);localStorage.setItem(SESSION_KEY,JSON.stringify(a[phone]));}
+  }
+
+  // Add bulk-offer button to owner bar.
+  function addOwnerTool(){const bar=document.getElementById('ownerMasterBar');if(bar&&!document.getElementById('bulkOfferBtn')){const b=document.createElement('button');b.id='bulkOfferBtn';b.className='owner-btn owner-btn-special';b.innerHTML='🏷️ Quantity Offer';b.onclick=openBulkOfferManager;const wrap=bar.querySelector('.owner-nav-tools');if(wrap)wrap.appendChild(b)}}
+  ensureCartUI();ensureCustomerModal();addOwnerTool();
+  setTimeout(()=>{addOwnerTool();ensureCartUI();},500);
 })();
 </script>
 
 <script>
-/* ===== OWNER CONTROL + PAYMENT SETTINGS + CUSTOMER PROFILE ===== */
+/* ===== SIMPLE CUSTOMER LOGIN SYSTEM V4 ===== */
 (function(){
-  const GUEST_KEY='b2b_guest_verified_v4';
-  const CART_KEY='b2b_guest_cart_v4';
-  let ownerTimer=null;
-
-  function owner(){return !!window.isOwnerLoggedIn;}
-  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
-  function guest(){try{return JSON.parse(sessionStorage.getItem(GUEST_KEY)||'null')}catch(e){return null}}
-  function cart(){try{return JSON.parse(sessionStorage.getItem(CART_KEY)||'[]')}catch(e){return []}}
-  function serverSave(){
-    if(!owner()) return;
-    const cfg={...masterSettings,products:Array.isArray(window.products)?window.products:[]};
-    fetch('/api/admin/site-config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})}).catch(()=>{});
+  const API='/api'; let customer=null;
+  async function api(path, opts={}){
+    const r=await fetch(API+path,{credentials:'same-origin',headers:{'content-type':'application/json',...(opts.headers||{})},...opts});
+    let d={}; try{d=await r.json()}catch(e){}
+    if(!r.ok) throw new Error(d.error||'Request failed'); return d;
   }
-  function serverLoad(){
-    fetch('/api/site-config').then(r=>r.ok?r.json():null).then(d=>{
-      const c=d&&d.config;if(!c)return;
-      if(c.products&&Array.isArray(c.products)&&c.products.length){window.products=c.products;try{saveProducts()}catch(e){}}
-      Object.keys(c).forEach(k=>{if(k!=='products')masterSettings[k]=c[k]});
-      try{saveSettings();applySettings()}catch(e){}
-      if(typeof window.renderProductGrid==='function')window.renderProductGrid(window.products||[]);
-    }).catch(()=>{});
+  const clean=v=>String(v||'').replace(/\D/g,'').slice(-10);
+  const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+  function nav(){const b=document.getElementById('customerAuthNavBtn'); if(!b)return; b.style.setProperty('display','inline-flex','important'); b.textContent=customer?'👤 '+customer.name:'👤 Customer Login';}
+  function modal(){
+    if(document.getElementById('simpleCustomerModal'))return;
+    const d=document.createElement('div'); d.className='modal-overlay'; d.id='simpleCustomerModal';
+    d.innerHTML=`<div class="modal-card" style="max-width:500px"><div class="modal-header"><h3>👤 Customer Account</h3><button class="close-btn" onclick="closeModal('simpleCustomerModal')">×</button></div>
+      <div id="scAuth"><div style="display:flex;gap:7px;margin-bottom:12px"><button id="scLoginTab" class="btn btn-primary" onclick="scTab('login')">Login</button><button id="scRegTab" class="btn btn-light" onclick="scTab('reg')">Create Account</button></div>
+      <div id="scLogin"><div class="form-group"><label>Mobile Number</label><input id="scPhone" inputmode="numeric" maxlength="10"></div><div class="form-group"><label>Password</label><input id="scPass" type="password"></div><button class="btn btn-primary" style="width:100%" onclick="scLoginNow()">Login</button></div>
+      <div id="scReg" style="display:none"><div class="form-group"><label>Full Name</label><input id="scName"></div><div class="form-group"><label>Mobile Number</label><input id="scRegPhone" inputmode="numeric" maxlength="10"></div><div class="form-group"><label>Password (8+ characters)</label><input id="scRegPass" type="password"></div><div class="form-group"><label>Confirm Password</label><input id="scRegPass2" type="password"></div><div class="form-group"><label>Delivery Address (optional)</label><textarea id="scAddress"></textarea></div><div class="form-group"><label>PIN (optional)</label><input id="scPin" inputmode="numeric" maxlength="6"></div><button class="btn btn-primary" style="width:100%" onclick="scRegisterNow()">Create Account</button></div></div>
+      <div id="scDash" style="display:none"></div></div>`;
+    document.body.appendChild(d);
   }
-
-  function hideCustomerFromOwner(){
-    if(!owner())return;
-    ['guestIdentityBar','cartNavBtn','guestCartModal','guestVerifyModal','guestProfileModal','checkoutModal','orderSuccessModal'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.display='none';});
-    document.querySelectorAll('.nav-actions button').forEach(b=>{if(/cart|customer|profile|order|buy now|add to cart/i.test(b.textContent||'')) b.style.display='none';});
-  }
-
-  function customerProfile(){
-    const g=guest(); if(!g)return alert('আগে Customer Verification করুন।');
-    let m=document.getElementById('guestProfileModal');
-    if(!m){m=document.createElement('div');m.className='modal-overlay';m.id='guestProfileModal';m.innerHTML=`<div class="modal-card" style="max-width:520px"><div class="modal-header"><h3>👤 Customer Profile</h3><button class="close-btn" onclick="closeModal('guestProfileModal')">×</button></div><div id="guestProfileBody"></div></div>`;document.body.appendChild(m)}
-    document.getElementById('guestProfileBody').innerHTML=`<div style="background:#eff6ff;padding:16px;border-radius:12px"><b>${esc(g.name)}</b><br>📱 ${esc(g.mobile)}<br><small>Customer verification active</small></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:15px"><button class="btn btn-primary" onclick="closeModal('guestProfileModal');openGuestCart()">🛒 My Cart</button><button class="btn btn-danger" onclick="customerGuestLogout()">🚪 Logout</button></div>`;
-    openModal('guestProfileModal');
-  }
-  window.openCustomerProfile=customerProfile;
-  window.customerGuestLogout=function(){sessionStorage.removeItem(GUEST_KEY);sessionStorage.removeItem(CART_KEY);document.getElementById('guestProfileModal')?.remove();document.getElementById('guestIdentityBar')?.remove();document.getElementById('cartNavBtn')?.remove();alert('✅ Customer logout successful.');location.reload();};
-
-  function ensureCustomerProfileButton(){
-    if(owner())return;
-    const nav=document.querySelector('.nav-actions');if(!nav)return;
-    const g=guest();let b=document.getElementById('customerProfileBtn');
-    if(g){if(!b){b=document.createElement('button');b.id='customerProfileBtn';b.className='btn btn-light';b.type='button';nav.insertBefore(b,nav.firstChild)}b.textContent='👤 '+g.name+' • '+g.mobile;b.onclick=customerProfile;}
-    else if(b)b.remove();
-  }
-
-  function addOwnerSettingsButton(){
-    const tools=document.querySelector('.owner-nav-tools');if(!tools||document.getElementById('ownerPaymentSettingsBtn'))return;
-    const b=document.createElement('button');b.id='ownerPaymentSettingsBtn';b.className='owner-btn owner-btn-special';b.textContent='💰 Price • Delivery • QR';b.onclick=openOwnerPaymentSettings;tools.insertBefore(b,tools.firstChild);
-  }
-
-  function openOwnerPaymentSettings(){
-    if(!owner()){return triggerOwnerAccess();}
-    let m=document.getElementById('ownerPaymentSettingsModal');
-    if(!m){m=document.createElement('div');m.className='modal-overlay';m.id='ownerPaymentSettingsModal';m.innerHTML=`<div class="modal-card" style="max-width:760px"><div class="modal-header"><h3>💰 Pricing • Delivery • Payment QR</h3><button class="close-btn" onclick="closeModal('ownerPaymentSettingsModal')">×</button></div><p style="color:#64748b;margin-top:0">এখান থেকে প্রতিটি product-এর quantity-wise offer price, delivery charge, UPI ID এবং customer payment QR বদলাতে পারবেন।</p><div class="form-group"><label>Product</label><select id="opsProduct"></select></div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px"><div class="form-group"><label>1+ Price</label><input id="ops1" type="number"></div><div class="form-group"><label>5+ Price</label><input id="ops5" type="number"></div><div class="form-group"><label>10+ Price</label><input id="ops10" type="number"></div><div class="form-group"><label>25+ Price</label><input id="ops25" type="number"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="form-group"><label>Delivery Charge (₹)</label><input id="opsDelivery" type="number" min="0"></div><div class="form-group"><label>UPI ID</label><input id="opsUpi" placeholder="example@upi"></div></div><div class="form-group"><label>Payment QR Code Upload</label><input id="opsQr" type="file" accept="image/png,image/jpeg,image/webp"><div id="opsQrPreview" style="margin-top:8px"></div></div><button class="btn btn-primary" style="width:100%" onclick="saveOwnerPaymentSettings()">💾 Save All Payment & Pricing Settings</button></div>`;document.body.appendChild(m);document.getElementById('opsProduct').addEventListener('change',loadOwnerProductSettings);document.getElementById('opsQr').addEventListener('change',function(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{document.getElementById('opsQrPreview').innerHTML='<img src="'+r.result+'" style="width:150px;height:150px;object-fit:contain;border:1px solid #ddd;border-radius:10px">';m.dataset.qr=r.result};r.readAsDataURL(f);});}
-    const sel=document.getElementById('opsProduct');sel.innerHTML=(window.products||[]).map(p=>`<option value="${esc(p.id)}">${esc(p.title)}</option>`).join('');
-    document.getElementById('opsDelivery').value=Number(masterSettings.deliveryFee||0);document.getElementById('opsUpi').value=masterSettings.upiId||'';m.dataset.qr=masterSettings.qrCode||'';document.getElementById('opsQrPreview').innerHTML=masterSettings.qrCode?'<img src="'+masterSettings.qrCode+'" style="width:150px;height:150px;object-fit:contain;border:1px solid #ddd;border-radius:10px">':'<span style="color:#64748b">No uploaded QR yet.</span>';loadOwnerProductSettings();openModal('ownerPaymentSettingsModal');
-  }
-  window.openOwnerPaymentSettings=openOwnerPaymentSettings;
-  function loadOwnerProductSettings(){const id=document.getElementById('opsProduct')?.value,p=(window.products||[]).find(x=>x.id===id);if(!p)return;const t=Array.isArray(p.bulkTiers)?p.bulkTiers:[];const get=n=>{const x=t.find(a=>Number(a.min)===n);return x?Number(x.price):Number(p.price||0)};document.getElementById('ops1').value=get(1);document.getElementById('ops5').value=get(5);document.getElementById('ops10').value=get(10);document.getElementById('ops25').value=get(25);}
-  window.saveOwnerPaymentSettings=function(){
-    if(!owner())return alert('Owner login required.');
-    const id=document.getElementById('opsProduct').value,p=(window.products||[]).find(x=>x.id===id);if(!p)return;
-    p.price=Number(document.getElementById('ops1').value)||p.price;p.bulkTiers=[{min:1,price:Number(document.getElementById('ops1').value)||p.price},{min:5,price:Number(document.getElementById('ops5').value)||p.price},{min:10,price:Number(document.getElementById('ops10').value)||p.price},{min:25,price:Number(document.getElementById('ops25').value)||p.price}];masterSettings.deliveryFee=Number(document.getElementById('opsDelivery').value)||0;masterSettings.upiId=document.getElementById('opsUpi').value.trim();masterSettings.qrCode=document.getElementById('ownerPaymentSettingsModal').dataset.qr||masterSettings.qrCode||'';saveProducts();saveSettings();serverSave();applySettings();if(typeof renderProductGrid==='function')renderProductGrid(products);closeModal('ownerPaymentSettingsModal');alert('✅ Price, quantity offers, delivery charge and payment QR saved.');
-  };
-
-  function setQr(){
-    const img=document.getElementById('upiQrImg');if(!img)return;const total=Number((document.getElementById('mTotal')?.innerText||'').replace(/[^0-9.]/g,''))||0;
-    if(masterSettings.qrCode){img.src=masterSettings.qrCode;return;}
-    const upi=masterSettings.upiId||'';img.src=`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(`upi://pay?pa=${upi}&pn=${masterSettings.name||'B2B PVC PRINTING SHOP'}&am=${total}&cu=INR`)}`;
-  }
-  function addScreenshotField(){const txn=document.getElementById('custTxn');if(!txn||document.getElementById('custPaymentShot'))return;const wrap=txn.closest('.form-group')||txn.parentElement;const d=document.createElement('div');d.className='form-group';d.innerHTML='<label>Payment Screenshot (optional if Transaction ID given)</label><input id="custPaymentShot" type="file" accept="image/png,image/jpeg,image/webp">';wrap.parentElement.appendChild(d);}
-
-  // Use the secure worker guest-order endpoint so Owner gets the real purchase record and WhatsApp notification.
-  window.handlePlaceOrder=async function(e){
-    e.preventDefault();
-    const name=document.getElementById('custName').value.trim(),phone=document.getElementById('custPhone').value.replace(/\D/g,'').slice(-10),address=document.getElementById('custAddress').value.trim(),pin=document.getElementById('custPin').value.trim(),txn=document.getElementById('custTxn').value.trim();
-    if(name.length<2||phone.length!==10||address.length<5||pin.length<4)return alert('Name, mobile, full address and PIN দিন।');
-    const g=guest();if(!g||g.name!==name||g.mobile!==phone)return alert('Customer verification আবার করুন।');
-    const shot=document.getElementById('custPaymentShot');let screenshot='';
-    if(shot?.files?.[0]){if(shot.files[0].size>650000)return alert('Screenshot ছোট করুন (650KB-এর মধ্যে)।');screenshot=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(shot.files[0])});}
-    if(!txn&&!screenshot)return alert('Transaction ID অথবা Payment Screenshot দিন।');
-    const items=cart().map(x=>{const c=(window.products||[]).find(p=>p.id===x.id),u=(function(){let z=Number(c.price||0);(Array.isArray(c.bulkTiers)?c.bulkTiers:[]).slice().sort((a,b)=>a.min-b.min).forEach(t=>{if(x.qty>=Number(t.min))z=Number(t.price)});return z})();return{id:c.id,title:c.title,quantity:x.qty,unitPrice:u,total:u*x.qty}});
-    const subtotal=items.reduce((s,i)=>s+i.total,0),delivery=Number(masterSettings.deliveryFee||0),total=subtotal+delivery;
-    const capExpected=document.getElementById('guestCaptchaText')?.textContent||'';
-    const btn=e.submitter||document.querySelector('#checkoutModal button[type="submit"]');if(btn)btn.disabled=true;
-    try{const r=await fetch('/api/guest-order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,phone,address,pin,items,subtotal,delivery,total,transactionId:txn,paymentScreenshot:screenshot,captchaAnswer:capExpected,captchaExpected:capExpected})});const d=await r.json().catch(()=>({}));if(!r.ok||!d.ok)throw new Error(d.error||'Order failed.');sessionStorage.removeItem(CART_KEY);closeModal('checkoutModal');const g2=guest();document.getElementById('successTrackingId')&&(document.getElementById('successTrackingId').textContent=d.orderNo||'');document.getElementById('successWhatsappLink')&&(document.getElementById('successWhatsappLink').style.display='none');if(document.getElementById('orderSuccessModal'))openModal('orderSuccessModal');alert('✅ Purchase submitted successfully. Receipt token generated.');}
-    catch(err){alert('❌ '+err.message)}finally{if(btn)btn.disabled=false;}
-  };
-
-  // Keep QR/payment data current whenever checkout opens.
-  const oldGuestCheckout=window.guestCheckout;
-  window.guestCheckout=function(){if(typeof oldGuestCheckout==='function')oldGuestCheckout();setTimeout(()=>{addScreenshotField();setQr();},50);};
-
-  function refresh(){
-    if(owner()){hideCustomerFromOwner();addOwnerSettingsButton();}
-    else {ensureCustomerProfileButton();}
-  }
-  serverLoad();
-  refresh();
-  ownerTimer=setInterval(refresh,500);
+  window.scTab=function(t){modal(); const l=document.getElementById('scLogin'),r=document.getElementById('scReg'); l.style.display=t==='login'?'block':'none';r.style.display=t==='reg'?'block':'none';document.getElementById('scLoginTab').className='btn '+(t==='login'?'btn-primary':'btn-light');document.getElementById('scRegTab').className='btn '+(t==='reg'?'btn-primary':'btn-light');};
+  function openAuth(){modal();document.getElementById('scAuth').style.display='block';document.getElementById('scDash').style.display='none';scTab('login');openModal('simpleCustomerModal');}
+  async function load(){try{const d=await api('/auth/me');customer=d.user||null; if(customer)localStorage.setItem(SESSION_KEY,JSON.stringify(customer)); else localStorage.removeItem(SESSION_KEY); nav();}catch(e){customer=null;nav();}}
+  window.scLoginNow=async function(){try{const phone=clean(document.getElementById('scPhone').value),password=document.getElementById('scPass').value;if(phone.length!==10||!password)return alert('10-digit mobile number and password দিন।');const d=await api('/auth/login',{method:'POST',body:JSON.stringify({phone,password})});customer=d.user; localStorage.setItem(SESSION_KEY,JSON.stringify(customer)); nav();closeModal('simpleCustomerModal');alert('✅ Customer login successful.');}catch(e){alert('❌ '+e.message);}};
+  window.scRegisterNow=async function(){try{const name=document.getElementById('scName').value.trim(),phone=clean(document.getElementById('scRegPhone').value),p=document.getElementById('scRegPass').value,p2=document.getElementById('scRegPass2').value,address=document.getElementById('scAddress').value.trim(),pin=document.getElementById('scPin').value.trim();if(name.length<2||phone.length!==10)return alert('Name ও valid 10-digit mobile দিন।');if(p.length<8)return alert('Password কমপক্ষে 8 characters দিন।');if(p!==p2)return alert('Password দুটো এক নয়।');const d=await api('/auth/register',{method:'POST',body:JSON.stringify({name,phone,password:p,address,pin})});customer=d.user; localStorage.setItem(SESSION_KEY,JSON.stringify(customer)); nav();closeModal('simpleCustomerModal');alert('✅ Customer account তৈরি হয়েছে।');}catch(e){alert('❌ '+e.message);}};
+  window.customerLogoutV2=async function(){try{await api('/auth/logout',{method:'POST'});}catch(e){}customer=null; localStorage.removeItem(SESSION_KEY);nav();closeModal('simpleCustomerModal');alert('✅ Logout successful.');};
+  window.openCustomerAuthModal=function(){if(!customer)return openAuth();modal();const d=document.getElementById('scDash');document.getElementById('scAuth').style.display='none';d.style.display='block';d.innerHTML=`<div style="background:#eff6ff;padding:14px;border-radius:10px"><b>${esc(customer.name)}</b><br>📞 ${esc(customer.phone)}<br>📍 ${esc(customer.address||'Address not saved')} ${customer.pin?'• PIN '+esc(customer.pin):''}</div><div style="display:flex;gap:7px;margin-top:12px;flex-wrap:wrap"><button class="btn btn-light" onclick="scProfile()">✏️ Profile</button><button class="btn btn-light" onclick="closeModal('simpleCustomerModal');openCart()">🛒 Cart</button><button class="btn btn-danger" onclick="customerLogoutV2()">🚪 Logout</button></div>`;openModal('simpleCustomerModal');};
+  window.scProfile=function(){const name=prompt('Full Name',customer.name||'');if(name===null)return;const address=prompt('Delivery Address',customer.address||'');if(address===null)return;const pin=prompt('PIN',customer.pin||'');if(pin===null)return;api('/account/profile',{method:'PUT',body:JSON.stringify({name,address,pin})}).then(d=>{customer=d.user; localStorage.setItem(SESSION_KEY,JSON.stringify(customer)); nav();openCustomerAuthModal();}).catch(e=>alert('❌ '+e.message));};
+  const oldOrder=window.openOrderModal, oldCheckout=window.startCartCheckout;
+  window.openOrderModal=async function(id){if(!customer){openAuth();alert('Purchase করার আগে Customer Login/Create Account করুন।');return;}return oldOrder?oldOrder(id):null;};
+  window.startCartCheckout=async function(){if(!customer){openAuth();alert('Checkout করার আগে Customer Login/Create Account করুন।');return;}return oldCheckout?oldCheckout():null;};
+  modal(); load();
 })();
 </script>
+<style>
+  #customerAuthNavBtn{display:inline-flex!important;}
+</style>
+</body></html><script>
+/* ===== FINAL GUEST CHECKOUT + OWNER PERSISTENT ORDERS V7 ===== */
+(function(){
+  const GKEY='b2b_guest_profile_v7', CKEY='b2b_guest_cart_v7', CFGKEY='b2b_site_cfg_v7';
+  let cfg={deliveryFee:0,upiId:'',qrCode:'',discountEnabled:true,discountPercent:0,quantityOffers:{}};
+  let cart=[]; try{cart=JSON.parse(localStorage.getItem(CKEY)||'[]')}catch(e){cart=[]}
+  const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+  const phone=v=>String(v||'').replace(/\D/g,'').slice(-10);
+  const profile=()=>{try{return JSON.parse(sessionStorage.getItem(GKEY)||'null')}catch(e){return null}};
+  const saveCart=()=>{localStorage.setItem(CKEY,JSON.stringify(cart));updateCartButton()};
+  function qtyPrice(p,q){let base=Number(p.price||0),o=cfg.quantityOffers?.[p.id];if(o){[[1,o['1']],[5,o['5']],[10,o['10']],[25,o['25']]].forEach(([m,v])=>{if(q>=m&&Number(v)>0)base=Number(v)})}else if(Array.isArray(p.bulkTiers))p.bulkTiers.forEach(t=>{if(q>=Number(t.min||1))base=Number(t.price||base)});if(cfg.discountEnabled&&Number(cfg.discountPercent)>0)base=Math.max(0,Math.round(base*(1-Number(cfg.discountPercent)/100)));return base}
+  function totals(){let sub=0,mrp=0;for(const x of cart){const p=(window.products||[]).find(a=>a.id===x.id);if(!p)continue;sub+=qtyPrice(p,x.qty)*x.qty;mrp+=Number(p.normalPrice||p.mrp||p.price||0)*x.qty}const delivery=Math.max(0,Number(cfg.deliveryFee)||0);return{sub,mrp,delivery,total:sub+delivery,save:Math.max(0,mrp-sub)}}
+  async function loadCfg(){try{const r=await fetch('/api/site-config',{cache:'no-store'}),d=await r.json();if(r.ok&&d.config)cfg={...cfg,...d.config}}catch(e){}updateAll()}
+  function updateCartButton(){const nav=document.querySelector('.nav-actions');if(!nav)return;document.querySelectorAll('#cartNavBtn').forEach((b,i)=>{if(i)b.remove()});let b=document.getElementById('cartNavBtn');if(!b){b=document.createElement('button');b.id='cartNavBtn';b.className='btn btn-primary';nav.insertBefore(b,nav.firstChild);b.onclick=()=>openCart()}b.innerHTML=`🛒 Cart (<span>${cart.reduce((n,x)=>n+(x.qty||0),0)}</span>)`}
+  function updateProfile(){document.getElementById('customerAuthNavBtn')?.remove();const nav=document.querySelector('.nav-actions');if(!nav)return;let b=document.getElementById('guestProfileBtn'),p=profile();if(!p){b?.remove();return}if(!b){b=document.createElement('button');b.id='guestProfileBtn';b.className='btn btn-light';nav.appendChild(b)}b.textContent=`👤 ${p.name} • ${p.phone}`;b.onclick=()=>openGuestProfile()}
+  function removeLegacyCustomerUI(){['customerAuthNavBtn','customerAuthModal','customerDashboardModal','customerAuthV2','simpleCustomerModal','customerDashV2','secureCustomerModal'].forEach(id=>document.getElementById(id)?.remove());document.querySelectorAll('button,a').forEach(el=>{const t=(el.textContent||'').trim();if(/Customer Login|Customer Account|Create Account|My Account/i.test(t)&&el.id!=='guestProfileBtn')el.remove()});if(document.body.classList.contains('owner-session')){document.getElementById('guestProfileBtn')?.remove();document.getElementById('cartNavBtn')?.remove()}}
+  function modal(id,title,html){let m=document.getElementById(id);if(!m){m=document.createElement('div');m.className='modal-overlay';m.id=id;document.body.appendChild(m)}m.innerHTML=`<div class="modal-card" style="max-width:760px"><div class="modal-header"><h3>${title}</h3><button class="close-btn" onclick="document.getElementById('${id}').style.display='none'">×</button></div>${html}</div>`;m.style.display='flex';return m}
+  function verifyThen(action){const p=profile();if(p){action();return}const code=String(Math.floor(1000+Math.random()*9000));modal('guestVerifyFinal','👤 Customer Verification',`<p style="color:#475569">Add to Cart / Buy Now করার আগে শুধু একবার verification করুন।</p><div class="form-group"><label>Name *</label><input id="gvName"></div><div class="form-group"><label>Mobile *</label><input id="gvPhone" inputmode="numeric" maxlength="10"></div><div style="display:flex;gap:10px;align-items:center"><div style="font-size:24px;font-weight:900;letter-spacing:6px;background:#f1f5f9;padding:8px 14px">${code}</div><input id="gvCaptcha" placeholder="CAPTCHA" style="max-width:180px"></div><button class="btn btn-primary" style="margin-top:15px;width:100%" onclick="window.finishGuestVerify('${code}')">✓ Verify & Continue</button>`);window.finishGuestVerify=function(c){const n=document.getElementById('gvName')?.value.trim()||'',ph=phone(document.getElementById('gvPhone')?.value),cap=document.getElementById('gvCaptcha')?.value.trim()||'';if(n.length<2||ph.length!==10||cap!==c)return alert('Name, valid mobile এবং CAPTCHA সঠিক দিন।');sessionStorage.setItem(GKEY,JSON.stringify({name:n,phone:ph}));document.getElementById('guestVerifyFinal')?.remove();updateProfile();action()}}
+  window.addToCartV2=id=>verifyThen(()=>{const p=products.find(x=>x.id===id);if(!p)return;const q=Math.max(1,Number(window.cardQtyMap?.[id]||1)),x=cart.find(a=>a.id===id);if(x)x.qty+=q;else cart.push({id,qty:q});saveCart();renderCartFinal();alert('✅ Cart-এ যোগ হয়েছে।')});
+  window.openOrderModal=id=>verifyThen(()=>{if(id&&!cart.some(a=>a.id===id))cart.push({id,qty:Math.max(1,Number(window.cardQtyMap?.[id]||1))});saveCart();openCart(true)});
+  function renderCartFinal(){const box=document.getElementById('finalCartBody');if(!box)return;if(!cart.length){box.innerHTML='<div style="padding:30px;text-align:center">🛒 Cart empty.</div>';return}let h='';for(const x of cart){const p=products.find(a=>a.id===x.id);if(!p)continue;const u=qtyPrice(p,x.qty);h+=`<div style="padding:12px 0;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;gap:10px"><div><b>${esc(p.title)}</b><div>₹${u} × ${x.qty} = ₹${u*x.qty}</div></div><div><button class="btn btn-light" onclick="window.finalCartQty('${x.id}',-1)">−</button> ${x.qty} <button class="btn btn-light" onclick="window.finalCartQty('${x.id}',1)">+</button> <button class="btn btn-danger" onclick="window.finalCartRemove('${x.id}')">Remove</button></div></div>`}const t=totals();h+=`<div style="text-align:right;padding-top:15px"><div>Subtotal: ₹${t.sub}</div><div>Discount: ₹${t.save}</div><div>Delivery: ₹${t.delivery}</div><h3>Total: ₹${t.total}</h3><button class="btn btn-primary" onclick="window.finalCheckout()">💳 Proceed to Payment</button></div>`;box.innerHTML=h}
+  window.finalCartQty=(id,d)=>{const x=cart.find(a=>a.id===id);if(!x)return;x.qty=Math.max(1,x.qty+d);saveCart();renderCartFinal()};window.finalCartRemove=id=>{cart=cart.filter(a=>a.id!==id);saveCart();renderCartFinal()};window.openCart=()=>{modal('finalCart','🛒 Your Cart','<div id="finalCartBody"></div>');renderCartFinal()};
+  window.finalCheckout=function(){const p=profile();if(!p)return verifyThen(window.finalCheckout);if(!cart.length)return alert('Cart empty.');const t=totals();const items=cart.map(x=>{const c=products.find(a=>a.id===x.id),u=qtyPrice(c,x.qty);return{id:c.id,title:c.title,quantity:x.qty,unitPrice:u,total:u*x.qty,mrp:Number(c.normalPrice||c.mrp||c.price||0)}});let qr=cfg.qrCode;if(!qr&&cfg.upiId){const upi=`upi://pay?pa=${encodeURIComponent(cfg.upiId)}&pn=${encodeURIComponent(masterSettings.name||'B2B PVC PRINTING SHOP')}&am=${t.total}&cu=INR`;qr='https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='+encodeURIComponent(upi)}modal('finalCheckout','💳 Confirm Order & Payment',`<div style="background:#f8fafc;padding:12px;border-radius:10px"><b>Customer:</b> ${esc(p.name)}<br><b>Mobile:</b> ${esc(p.phone)}</div><div class="form-group"><label>Full Address *</label><textarea id="gcAddress"></textarea></div><div class="form-group"><label>PIN Code *</label><input id="gcPin" inputmode="numeric" maxlength="6"></div><div style="text-align:center;margin:12px 0">${qr?`<img src="${qr}" style="width:220px;height:220px;object-fit:contain;border:1px solid #ddd;border-radius:10px"><div><b>UPI: ${esc(cfg.upiId||'Scan QR')}</b></div>`:'<b>Payment QR is not configured by Owner yet.</b>'}</div><div class="form-group"><label>Transaction ID / UTR (optional if screenshot uploaded)</label><input id="gcTxn"></div><div class="form-group"><label>Payment Screenshot (optional if UTR entered)</label><input id="gcShot" type="file" accept="image/*"></div><div style="background:#eff6ff;padding:12px"><b>Subtotal ₹${t.sub}</b> • Discount ₹${t.save} • Delivery ₹${t.delivery} • <b>Total ₹${t.total}</b></div><button class="btn btn-primary" style="width:100%;margin-top:14px" onclick="window.submitGuestOrder()">✅ Confirm Order</button>`);document.getElementById('gcAddress').value=p.address||'';document.getElementById('gcPin').value=p.pin||'';window._checkoutItems=items;window._checkoutTotals=t}
+  window.submitGuestOrder=async function(){const p=profile(),address=document.getElementById('gcAddress')?.value.trim()||'',pin=document.getElementById('gcPin')?.value.trim()||'',txn=document.getElementById('gcTxn')?.value.trim()||'',file=document.getElementById('gcShot')?.files[0];if(!p||!address||!/^[0-9]{6}$/.test(pin)||(!txn&&!file))return alert('Full Address, 6-digit PIN এবং Transaction ID/UTR অথবা payment screenshot অন্তত একটি দিন।');let shot='';if(file){if(file.size>900000)return alert('Screenshot 900KB-এর মধ্যে দিন।');shot=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(file)})}const t=window._checkoutTotals;try{const r=await fetch('/api/guest-order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:p.name,phone:p.phone,address,pin,items:window._checkoutItems,subtotal:t.sub,mrpTotal:t.mrp,delivery:t.delivery,total:t.total,paymentTxn:txn,paymentScreenshot:shot})}),d=await r.json();if(!r.ok)throw new Error(d.error||'Order failed');cart=[];saveCart();sessionStorage.setItem(GKEY,JSON.stringify({...p,address,pin}));document.getElementById('finalCheckout')?.remove();showReceipt(d.receipt)}catch(e){alert('❌ '+e.message)}};
+  function showReceipt(r){modal('finalReceipt','🧾 Purchase Bill / Receipt',`<div id="printReceipt" style="background:#fff;padding:20px"><h2 style="text-align:center">B2B PVC PRINTING SHOP</h2><hr><b>Order ID:</b> ${esc(r.orderNo)}<br><b>Date:</b> ${esc(r.createdAt)}<br><b>Customer:</b> ${esc(r.name)}<br><b>Mobile:</b> ${esc(r.phone)}<br><b>Address:</b> ${esc(r.address)}<br><b>PIN:</b> ${esc(r.pin)}<hr>${r.items.map(i=>`<div>${esc(i.title)} — ${i.quantity} × ₹${i.unitPrice} = ₹${i.total}</div>`).join('')}<hr><b>Subtotal:</b> ₹${r.subtotal}<br><b>Discount:</b> ₹${Number(r.discount)||0}<br><b>Delivery:</b> ₹${r.delivery}<br><h2>Total: ₹${r.total}</h2><b>Payment UTR:</b> ${esc(r.paymentTxn||'')}${r.hasPaymentScreenshot?'<br><b>Payment Screenshot:</b> Received':''}<br><b>Status:</b> ${esc(r.status)}</div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" onclick="window.print()">🖨️ Print / Save PDF</button><button class="btn btn-light" onclick="document.getElementById('finalReceipt')?.remove()">Close</button></div>`)}
+  function openGuestProfile(){const p=profile();if(!p)return;modal('guestProfile','👤 Customer Profile',`<div style="background:#f8fafc;padding:16px;border-radius:10px"><b>Name:</b> ${esc(p.name)}<br><b>Mobile:</b> ${esc(p.phone)}${p.address?`<br><b>Address:</b> ${esc(p.address)}`:''}${p.pin?`<br><b>PIN:</b> ${esc(p.pin)}`:''}</div><button class="btn btn-danger" style="margin-top:14px" onclick="window.guestLogout()">🚪 Logout</button>`)}
+  window.guestLogout=()=>{sessionStorage.removeItem(GKEY);cart=[];localStorage.removeItem(CKEY);document.getElementById('guestProfile')?.remove();document.getElementById('finalCart')?.remove();updateProfile();updateCartButton();alert('✅ Customer logout complete.')};
+  function ownerSettings(){if(!document.body.classList.contains('owner-session'))return alert('Owner Login করুন।');const q=cfg.quantityOffers||{},opts=(products||[]).map(p=>{const o=q[p.id]||{};return `<div style="border:1px solid #e2e8f0;padding:10px;border-radius:8px;margin:8px 0"><b>${esc(p.title)}</b><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:7px">${[1,5,10,25].map(n=>`<label style="font-size:11px">${n}+<input id="qo_${esc(p.id)}_${n}" value="${o[n]??p.price??0}" type="number" min="0"></label>`).join('')}</div></div>`}).join('');modal('ownerPriceCfg','💰 Price • Discount • Delivery • Payment QR',`<div class="form-group"><label>Delivery Amount (₹)</label><input id="cfgDelivery" type="number" min="0" value="${cfg.deliveryFee||0}"></div><div class="form-group"><label>UPI ID</label><input id="cfgUpi" value="${esc(cfg.upiId||'')}"></div><div class="form-group"><label>Discount % (all products)</label><input id="cfgDisc" type="number" min="0" max="100" value="${cfg.discountPercent||0}"></div><label style="display:flex;gap:8px;align-items:center"><input id="cfgSale" type="checkbox" ${cfg.discountEnabled!==false?'checked':''}> Product-এ SALE দেখাবেন</label><div class="form-group" style="margin-top:12px"><label>Payment QR Image Upload</label><input id="cfgQr" type="file" accept="image/*"><div id="qrPreview">${cfg.qrCode?`<img src="${cfg.qrCode}" style="width:160px;height:160px;object-fit:contain">`:''}</div></div><h4>Quantity-wise Offer Price</h4><div style="max-height:360px;overflow:auto">${opts}</div><button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="window.saveOwnerPriceCfg()">💾 Save Settings</button>`);document.getElementById('cfgQr').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>1000000)return alert('QR image 1MB-এর মধ্যে দিন।');const fr=new FileReader();fr.onload=()=>document.getElementById('qrPreview').innerHTML=`<img src="${fr.result}" style="width:160px;height:160px;object-fit:contain">`;fr.readAsDataURL(f)} }
+  window.saveOwnerPriceCfg=async()=>{const offers={};for(const p of products){offers[p.id]={};for(const n of [1,5,10,25])offers[p.id][n]=Number(document.getElementById(`qo_${p.id}_${n}`)?.value||p.price||0)}let qr=cfg.qrCode;const f=document.getElementById('cfgQr')?.files[0];if(f)qr=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(f)});const next={deliveryFee:Number(document.getElementById('cfgDelivery').value)||0,upiId:document.getElementById('cfgUpi').value.trim(),qrCode:qr,discountEnabled:document.getElementById('cfgSale').checked,discountPercent:Math.max(0,Math.min(100,Number(document.getElementById('cfgDisc').value)||0)),quantityOffers:offers};try{const r=await fetch('/api/admin/site-config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)}),d=await r.json();if(!r.ok)throw new Error(d.error||'Save failed');cfg=d.config;document.getElementById('ownerPriceCfg')?.remove();alert('✅ Price, Delivery, Discount and QR permanently saved in D1.');renderPublicProducts()}catch(e){alert('❌ '+e.message)}};
+  async function ownerOrders(){if(!document.body.classList.contains('owner-session'))return alert('Owner Login করুন।');modal('ownerOrdersFinal','📋 All Purchase Orders','<div id="ownerOrdersBody">Loading...</div>');try{const r=await fetch('/api/admin/orders',{cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'Orders load failed');document.getElementById('ownerOrdersBody').innerHTML=d.orders?.length?d.orders.map(o=>{let items=[];try{items=JSON.parse(o.items_json||'[]')}catch(e){}return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:8px 0"><b>🆔 ${esc(o.order_no)}</b><br>👤 ${esc(o.customer_name)} • 📞 ${esc(o.phone)}<br>📍 ${esc(o.address)} • PIN ${esc(o.pin)}<br>🛒 ${esc(items.map(i=>i.title+' × '+i.quantity).join(', '))}<br>💰 Amount ₹${o.total} • 🚚 Delivery ₹${o.delivery}<br>💳 Payment UTR: ${esc(o.payment_txn||'')}${o.payment_screenshot?'<br>🖼️ Payment screenshot: Received':''}<br>📌 <b>${esc(o.status)}</b><br><small>${esc(o.created_at)}</small></div>`}).join(''):'<p>No purchase orders yet.</p>'}catch(e){document.getElementById('ownerOrdersBody').innerHTML=`<p>❌ ${esc(e.message)}</p>`}}
+  function ownerTools(){if(!document.body.classList.contains('owner-session'))return;const wrap=document.querySelector('#ownerMasterBar .owner-nav-tools');if(!wrap)return;if(!document.getElementById('finalOwnerPriceBtn')){const b=document.createElement('button');b.id='finalOwnerPriceBtn';b.className='owner-btn owner-btn-special';b.textContent='💰 Price / Delivery / QR';b.onclick=ownerSettings;wrap.appendChild(b)}if(!document.getElementById('finalOwnerOrdersBtn')){const b=document.createElement('button');b.id='finalOwnerOrdersBtn';b.className='owner-btn';b.textContent='📋 All Purchases';b.onclick=ownerOrders;wrap.appendChild(b)}document.getElementById('guestProfileBtn')?.remove();document.getElementById('cartNavBtn')?.remove()}
+  function renderPublicProducts(){if(document.body.classList.contains('owner-session'))return;const grid=document.getElementById('productGrid');if(!grid||!window.products?.length)return;grid.querySelectorAll('.admin-card-actions').forEach(x=>x.style.display='none');grid.querySelectorAll('.product-card').forEach(card=>{let btn=card.querySelector('.btn-checkout');if(!btn)return;const id=card.id.replace('card-wrapper-',''),holder=btn.parentElement;if(!holder)return;holder.querySelectorAll('button').forEach(x=>{if(x!==btn&&/Buy Now|Pre-Paid|Order/i.test((x.textContent||'')))x.remove()});btn.textContent='🛒 Add to Cart';btn.onclick=()=>window.addToCartV2(id);if(!holder.querySelector('.finalBuyNowBtn')){const buy=document.createElement('button');buy.className='btn btn-primary finalBuyNowBtn';buy.textContent='⚡ Buy Now';buy.onclick=()=>window.openOrderModal(id);holder.insertBefore(buy,btn.nextSibling)}});grid.querySelectorAll('.offer-discount-badge').forEach(b=>{b.textContent=cfg.discountEnabled&&Number(cfg.discountPercent)>0?`🔥 SALE ${cfg.discountPercent}% OFF`:'';b.style.display=b.textContent?'inline-flex':'none'})}
+  function updateAll(){removeLegacyCustomerUI();updateCartButton();updateProfile();ownerTools();renderPublicProducts()}
+  loadCfg();setTimeout(updateAll,300);setInterval(updateAll,1500)
+})();
+</script>
+<script>
+/* ===== V8 UX PATCH: LARGE VERIFICATION + FULL CART CHECKOUT + RELIABLE QR ===== */
+(function(){
+  const GKEY='b2b_guest_profile_v7';
+  const CKEY='b2b_guest_cart_v7';
+  const esc8=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+  const phone8=v=>String(v||'').replace(/\D/g,'').slice(-10);
+  const getP8=()=>{try{return JSON.parse(sessionStorage.getItem(GKEY)||'null')}catch{return null}};
+  const getCart8=()=>{try{return JSON.parse(localStorage.getItem(CKEY)||'[]')}catch{return []}};
+  function modal8(id,title,html){
+    let m=document.getElementById(id);
+    if(!m){m=document.createElement('div');m.className='modal-overlay';m.id=id;document.body.appendChild(m)}
+    m.innerHTML=`<div class="modal-card v8-modal-card"><div class="modal-header"><h3>${title}</h3><button class="close-btn" onclick="document.getElementById('${id}').style.display='none'">×</button></div>${html}</div>`;
+    m.style.display='flex';return m;
+  }
+  const style=document.createElement('style');
+  style.textContent=`
+    .v8-modal-card{width:min(94vw,900px)!important;max-height:92vh;overflow:auto;border-radius:18px!important}
+    #guestVerifyFinal .modal-card{width:min(94vw,620px)!important}
+    .v8-verify-box{background:linear-gradient(135deg,#eff6ff 0%,#f0fdf4 52%,#fff7ed 100%);border:2px solid #bfdbfe;border-radius:18px;padding:22px;box-shadow:0 12px 35px rgba(15,23,42,.12)}
+    .v8-verify-title{font-size:22px;font-weight:900;color:#0f172a;margin-bottom:7px}
+    .v8-label{display:block;font-weight:800;color:#1e293b;margin:13px 0 7px}
+    .v8-input{width:100%!important;box-sizing:border-box!important;min-height:54px!important;padding:13px 16px!important;border:2px solid #cbd5e1!important;border-radius:12px!important;background:#fff!important;font-size:17px!important;outline:none!important}
+    .v8-input:focus{border-color:#2563eb!important;box-shadow:0 0 0 4px rgba(37,99,235,.12)!important}
+    .v8-captcha-row{display:grid;grid-template-columns:180px 1fr;gap:12px;align-items:center;margin-top:7px}
+    .v8-captcha-code{min-height:54px;display:flex;align-items:center;justify-content:center;border-radius:12px;background:repeating-linear-gradient(135deg,#dbeafe,#dbeafe 9px,#bfdbfe 9px,#bfdbfe 18px);border:2px dashed #2563eb;color:#1e3a8a;font-size:28px;font-weight:1000;letter-spacing:7px;user-select:none}
+    .v8-primary{min-height:54px!important;border-radius:12px!important;font-size:17px!important;font-weight:900!important}
+    .v8-order-summary{border:2px solid #e2e8f0;border-radius:14px;padding:15px;background:#fff;margin:12px 0}
+    .v8-order-row{display:grid;grid-template-columns:1fr auto auto auto;gap:12px;padding:11px 0;border-bottom:1px solid #e2e8f0;align-items:center}
+    .v8-order-row:last-child{border-bottom:0}
+    .v8-pay-box{border:2px solid #86efac;background:#f0fdf4;border-radius:16px;padding:16px;text-align:center;margin:14px 0}
+    .v8-qr{width:min(300px,72vw);height:min(300px,72vw);object-fit:contain;background:#fff;border:5px solid #fff;border-radius:14px;box-shadow:0 5px 20px rgba(15,23,42,.15);display:block;margin:10px auto}
+    .v8-noqr{padding:18px;border-radius:12px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-weight:800}
+    @media(max-width:620px){.v8-captcha-row{grid-template-columns:1fr}.v8-order-row{grid-template-columns:1fr auto}.v8-order-row .v8-line-total{grid-column:2}.v8-modal-card{width:96vw!important}}
+  `;
+  document.head.appendChild(style);
 
-</body>
-</html>
+  window.openGuestVerificationV8=function(action){
+    const p=getP8(); if(p){return action()}
+    const code=String(Math.floor(1000+Math.random()*9000));
+    modal8('guestVerifyFinal','👤 Customer Verification',`<div class="v8-verify-box">
+      <div class="v8-verify-title">একবার Verification করুন</div>
+      <div style="color:#475569;font-size:15px;line-height:1.55">Name, Mobile এবং CAPTCHA ঠিকভাবে পূরণ করুন। Verification সফল হলে একই purchase-এর সময় আর verification চাইবে না।</div>
+      <label class="v8-label">👤 Customer Name *</label>
+      <input id="gvName" class="v8-input" autocomplete="name" placeholder="আপনার পুরো নাম লিখুন">
+      <label class="v8-label">📱 Mobile Number *</label>
+      <input id="gvPhone" class="v8-input" inputmode="numeric" maxlength="10" autocomplete="tel" placeholder="10 digit mobile number">
+      <label class="v8-label">🔐 CAPTCHA *</label>
+      <div class="v8-captcha-row"><div class="v8-captcha-code">${code}</div><input id="gvCaptcha" class="v8-input" placeholder="উপরের code লিখুন" autocomplete="off"></div>
+      <button class="btn btn-primary v8-primary" style="width:100%;margin-top:18px" onclick="window.finishGuestVerifyV8('${code}')">✓ Verify & Continue</button>
+    </div>`);
+    window.finishGuestVerifyV8=function(c){
+      const n=document.getElementById('gvName')?.value.trim()||'';
+      const ph=phone8(document.getElementById('gvPhone')?.value);
+      const cap=document.getElementById('gvCaptcha')?.value.trim()||'';
+      if(n.length<2)return alert('পূর্ণ নাম দিন।');
+      if(ph.length!==10)return alert('সঠিক 10-digit mobile number দিন।');
+      if(cap!==c)return alert('CAPTCHA সঠিক নয়।');
+      sessionStorage.setItem(GKEY,JSON.stringify({name:n,phone:ph}));
+      document.getElementById('guestVerifyFinal')?.remove();
+      if(typeof window.updateProfile==='function')window.updateProfile();
+      action();
+    };
+  };
+
+  window.openCartV8=function(){
+    let cart=getCart8();
+    const products=window.products||[];
+    if(!cart.length)return modal8('finalCart','🛒 Your Cart','<div style="padding:35px;text-align:center;font-size:18px">🛒 Cart empty.</div>');
+    let rows='';
+    for(const x of cart){
+      const p=products.find(a=>a.id===x.id); if(!p)continue;
+      const u=typeof window.qtyPrice==='function'?window.qtyPrice(p,x.qty):Number(p.price||0);
+      rows+=`<div class="v8-order-row"><div><b>${esc8(p.title)}</b><div style="color:#64748b;font-size:13px">Unit price: ₹${u}</div></div><div>Qty <b>${x.qty}</b></div><div>₹${u*x.qty}</div><div class="v8-line-total"><button class="btn btn-light" onclick="window.changeCartV8('${esc8(x.id)}',-1)">−</button> <button class="btn btn-light" onclick="window.changeCartV8('${esc8(x.id)}',1)">+</button></div></div>`;
+    }
+    const t=typeof window.totals==='function'?window.totals():{sub:0,save:0,delivery:0,total:0};
+    modal8('finalCart','🛒 Cart — Order Details',`<div class="v8-order-summary">${rows}
+      <div style="text-align:right;padding-top:14px;line-height:1.8"><div>Subtotal: <b>₹${t.sub}</b></div><div>Discount: <b>− ₹${t.save}</b></div><div>Delivery: <b>₹${t.delivery}</b></div><h2 style="margin:7px 0">Grand Total: ₹${t.total}</h2></div>
+      <button class="btn btn-primary v8-primary" style="width:100%" onclick="window.proceedCartV8()">💳 Proceed to Payment & Confirm Order</button>
+    </div>`);
+  };
+  window.changeCartV8=function(id,d){let c=getCart8(),x=c.find(a=>a.id===id);if(!x)return;x.qty=Math.max(1,x.qty+d);localStorage.setItem(CKEY,JSON.stringify(c));if(typeof window.updateCartButton==='function')window.updateCartButton();window.openCartV8()};
+  window.proceedCartV8=function(){window.openGuestVerificationV8(()=>window.finalCheckoutV8())};
+
+  window.finalCheckoutV8=async function(){
+    const p=getP8();
+    if(!p)return window.openGuestVerificationV8(()=>window.finalCheckoutV8());
+    const cart=getCart8(), products=window.products||[];
+    if(!cart.length)return alert('Cart empty.');
+    try{if(typeof window.loadCfg==='function')await window.loadCfg()}catch(e){}
+    const cfg=window.cfg||{};
+    const t=typeof window.totals==='function'?window.totals():{sub:0,mrp:0,delivery:0,total:0,save:0};
+    const items=cart.map(x=>{const c=products.find(a=>a.id===x.id),u=typeof window.qtyPrice==='function'?window.qtyPrice(c,x.qty):Number(c?.price||0);return{id:c.id,title:c.title,quantity:x.qty,unitPrice:u,total:u*x.qty,mrp:Number(c.normalPrice||c.mrp||c.price||0)}}).filter(Boolean);
+    let qr=cfg.qrCode||'';
+    if(!qr&&cfg.upiId){const upi=`upi://pay?pa=${encodeURIComponent(cfg.upiId)}&pn=${encodeURIComponent((window.masterSettings?.name)||'B2B PVC PRINTING SHOP')}&am=${encodeURIComponent(t.total)}&cu=INR`;qr='https://api.qrserver.com/v1/create-qr-code/?size=320x320&data='+encodeURIComponent(upi)}
+    const qrHtml=qr?`<div class="v8-pay-box"><div style="font-size:20px;font-weight:900;color:#166534">💳 Scan & Pay</div><img class="v8-qr" src="${esc8(qr)}" alt="Payment QR"><div style="font-size:18px;font-weight:900">UPI ID: ${esc8(cfg.upiId||'Owner QR')}</div><div style="color:#166534;margin-top:5px">Payment করার পর Transaction ID অথবা Screenshot দিন।</div></div>`:`<div class="v8-noqr">⚠️ Owner এখনো Payment QR configure করেননি। UPI ID-ও পাওয়া যায়নি।</div>`;
+    modal8('finalCheckout','💳 Confirm Order & Payment',`<div class="v8-order-summary">
+      <div style="background:#eff6ff;border-radius:12px;padding:13px"><b>Customer:</b> ${esc8(p.name)} &nbsp; | &nbsp; <b>Mobile:</b> ${esc8(p.phone)}</div>
+      <h4 style="margin:16px 0 8px">🛍️ Order Details</h4>
+      ${items.map(i=>`<div class="v8-order-row"><div><b>${esc8(i.title)}</b></div><div>Qty <b>${i.quantity}</b></div><div>₹${i.unitPrice}</div><div><b>₹${i.total}</b></div></div>`).join('')}
+      <div style="text-align:right;padding:12px 0;line-height:1.8"><div>Subtotal: ₹${t.sub}</div><div>Discount: − ₹${t.save}</div><div>Delivery: ₹${t.delivery}</div><h2>Payable Total: ₹${t.total}</h2></div>
+    </div>
+    <div class="form-group"><label class="v8-label">📍 Full Address *</label><textarea id="gcAddress" class="v8-input" style="min-height:110px!important" placeholder="House / Village / Road / Post Office / District"></textarea></div>
+    <div class="form-group"><label class="v8-label">📮 PIN Code *</label><input id="gcPin" class="v8-input" inputmode="numeric" maxlength="6" placeholder="6 digit PIN"></div>
+    ${qrHtml}
+    <div class="form-group"><label class="v8-label">💳 Transaction ID / UTR</label><input id="gcTxn" class="v8-input" placeholder="Payment করলে UTR / Transaction ID লিখুন (optional if screenshot)"></div>
+    <div class="form-group"><label class="v8-label">🖼️ Payment Screenshot</label><input id="gcShot" class="v8-input" type="file" accept="image/*"></div>
+    <div style="background:#fff7ed;border:1px solid #fdba74;padding:12px;border-radius:10px;color:#9a3412"><b>নোট:</b> Transaction ID অথবা Payment Screenshot — অন্তত একটি দেওয়া বাধ্যতামূলক।</div>
+    <button class="btn btn-primary v8-primary" style="width:100%;margin-top:16px" onclick="window.submitGuestOrderV8()">✅ Confirm Order & Generate Bill</button>`);
+    document.getElementById('gcAddress').value=p.address||'';
+    document.getElementById('gcPin').value=p.pin||'';
+    window._checkoutItemsV8=items;window._checkoutTotalsV8=t;
+  };
+  window.submitGuestOrderV8=async function(){
+    const p=getP8(),address=document.getElementById('gcAddress')?.value.trim()||'',pin=document.getElementById('gcPin')?.value.trim()||'',txn=document.getElementById('gcTxn')?.value.trim()||'',file=document.getElementById('gcShot')?.files[0];
+    if(!p||!address||!/^[0-9]{6}$/.test(pin))return alert('Full Address এবং সঠিক 6-digit PIN দিন।');
+    if(!txn&&!file)return alert('Transaction ID/UTR অথবা payment screenshot অন্তত একটি দিন।');
+    let shot='';if(file){if(file.size>900000)return alert('Payment screenshot 900KB-এর মধ্যে দিন।');shot=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(file)})}
+    const t=window._checkoutTotalsV8;try{const r=await fetch('/api/guest-order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:p.name,phone:p.phone,address,pin,items:window._checkoutItemsV8,subtotal:t.sub,mrpTotal:t.mrp,delivery:t.delivery,total:t.total,paymentTxn:txn,paymentScreenshot:shot})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Order failed');localStorage.removeItem(CKEY);sessionStorage.setItem(GKEY,JSON.stringify({...p,address,pin}));document.getElementById('finalCheckout')?.remove();if(typeof window.updateCartButton==='function')window.updateCartButton();if(typeof window.showReceipt==='function')window.showReceipt(d.receipt);else alert('Order successful: '+d.orderNo)}catch(e){alert('❌ '+e.message)}};
+
+  // Route all important customer purchase entry points through the V8 flow.
+  window.openOrderModal=id=>window.openGuestVerificationV8(()=>{let c=getCart8();if(id&&!c.some(x=>x.id===id))c.push({id,qty:1});localStorage.setItem(CKEY,JSON.stringify(c));if(typeof window.updateCartButton==='function')window.updateCartButton();window.openCartV8()});
+  window.startCartCheckout=()=>window.proceedCartV8();
+  window.addToCartV2=id=>window.openGuestVerificationV8(()=>{let c=getCart8(),x=c.find(a=>a.id===id);if(x)x.qty++;else c.push({id,qty:1});localStorage.setItem(CKEY,JSON.stringify(c));if(typeof window.updateCartButton==='function')window.updateCartButton();alert('✅ Product Cart-এ যোগ হয়েছে।')});
+  window.openCart=window.openCartV8;
+})();
+</script>
