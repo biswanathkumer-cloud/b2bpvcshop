@@ -21,3 +21,10 @@ Cloudflare:
 4. প্রথম Owner login-এর পরে Products/Settings section আলাদা আলাদা Save করুন
 
 নোট: এই environment থেকে live Cloudflare production browser test করা সম্ভব নয়। Code/static/migration checks করা হয়েছে।
+
+V21: Payment & Delivery save repaired; server-side order total calculation; UPI exact-amount payment link and QR generation; optional QR upload; purchase delete for Owner.
+
+V22 PAYMENT APP OPTIONS:
+- Checkout now shows PhonePe, Google Pay, Paytm and Other UPI options when Owner UPI ID is configured.
+- Each option uses an exact-amount UPI deep link with the saved UPI ID and current grand total.
+- Product images are unchanged.
