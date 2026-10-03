@@ -28,3 +28,6 @@ V22 PAYMENT APP OPTIONS:
 - Checkout now shows PhonePe, Google Pay, Paytm and Other UPI options when Owner UPI ID is configured.
 - Each option uses an exact-amount UPI deep link with the saved UPI ID and current grand total.
 - Product images are unchanged.
+
+
+V23 PAYMENT FIX: Payment & Delivery settings now persist in a dedicated D1 table payment_settings instead of the shared site_config JSON. This avoids the previous D1 save error. Custom QR remains in site_assets. UPI ID, delivery fee, discount and WhatsApp are preserved.

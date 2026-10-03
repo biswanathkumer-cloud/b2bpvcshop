@@ -20,6 +20,17 @@ CREATE TABLE IF NOT EXISTS guest_orders(
  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS site_config(id INTEGER PRIMARY KEY CHECK(id=1),config_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS payment_settings(
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ delivery_fee REAL NOT NULL DEFAULT 0,
+ upi_id TEXT NOT NULL DEFAULT '',
+ qr_code_url TEXT NOT NULL DEFAULT '',
+ whatsapp_number TEXT NOT NULL DEFAULT '',
+ discount_enabled INTEGER NOT NULL DEFAULT 1,
+ discount_percent REAL NOT NULL DEFAULT 0,
+ sale_enabled INTEGER NOT NULL DEFAULT 0,
+ updated_at TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS site_assets(asset_key TEXT PRIMARY KEY,asset_data TEXT NOT NULL,mime_type TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS products(
  id TEXT PRIMARY KEY,
