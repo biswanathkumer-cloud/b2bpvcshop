@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "b2bpvcshop",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "keep_vars": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "b2bpvcshop-db",
+      "database_id": "c5333265-87fb-41de-8cc2-4756bdbad4e9"
+    }
+  ]
+}
