@@ -56,3 +56,16 @@ CREATE TABLE IF NOT EXISTS support_messages(id INTEGER PRIMARY KEY AUTOINCREMENT
 CREATE INDEX IF NOT EXISTS idx_guest_orders_created ON guest_orders(created_at);
 CREATE INDEX IF NOT EXISTS idx_guest_orders_phone ON guest_orders(phone);
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);
+
+CREATE TABLE IF NOT EXISTS coupons(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ code TEXT NOT NULL UNIQUE,
+ discount_type TEXT NOT NULL DEFAULT 'percent',
+ discount_value REAL NOT NULL DEFAULT 0,
+ min_qty INTEGER NOT NULL DEFAULT 1,
+ min_amount REAL NOT NULL DEFAULT 0,
+ max_uses INTEGER NOT NULL DEFAULT 0,
+ used_count INTEGER NOT NULL DEFAULT 0,
+ active INTEGER NOT NULL DEFAULT 1,
+ created_at TEXT NOT NULL
+);

@@ -31,3 +31,13 @@ V22 PAYMENT APP OPTIONS:
 
 
 V23 PAYMENT FIX: Payment & Delivery settings now persist in a dedicated D1 table payment_settings instead of the shared site_config JSON. This avoids the previous D1 save error. Custom QR remains in site_assets. UPI ID, delivery fee, discount and WhatsApp are preserved.
+
+V24 PATCH NOTES
+- Owner Branding logo upload/save made safer; missing field/property errors are guarded.
+- Added D1-safe migrations for older payment_settings and site_assets schemas.
+- Added up to 6 custom poster/notification boxes with image, text, colour, size, style and alignment controls.
+- Added coupon system: percent/fixed discount, minimum quantity, minimum purchase and usage limit.
+- Existing quantity tiers 1+/5+/10+/25+/50+ remain unchanged.
+- Added automatic internal Payment Reference (PAY-...) for every saved order. This is an internal reference, not a bank-generated UTR.
+- Payment/QR section is placed below the billing/address information in checkout.
+- Existing product images and customer/order flow were kept intact.
